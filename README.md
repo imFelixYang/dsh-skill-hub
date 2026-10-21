@@ -4,10 +4,10 @@ A skill hub for **DeepSeek Harness**: search two public skill registries in one
 place, read a skill's README before installing it, and install / uninstall it
 into `$DSH_HOME/skills`.
 
-It is a from-scratch rewrite of the client half of
-[`pn1024/dsh-skill-market`](https://github.com/pn1024/dsh-skill-market) (MIT).
-The host half (the RPC layer that talks to both registries) is reused with
-permission of the license; the browser half is new.
+It ships as a first-class DSH panel — the sidebar row, the centre-column page and
+the composer picker are all contributed through the shell's own slot contracts,
+so geometry, indent, label colour, hover state and the collapsed rail are owned
+by DSH and follow whichever theme is active.
 
 ## What it does
 
@@ -25,26 +25,23 @@ permission of the license; the browser half is new.
 - **Composer picker** — a small button next to the chat input inserts
   `/skill-name` for any installed skill.
 
-## What it deliberately does not do
+## Design notes
 
-These are the things that made the original unpleasant, and none of them are
-here:
+A few properties this plugin holds itself to:
 
-| Behaviour | dsh-skill-market | dsh-skill-hub |
-| --- | --- | --- |
-| Renames the product in the sidebar | yes (`兴湘智能体`) | no |
-| Replaces the logo / wordmark / favicon | yes | no |
-| Renames the built-in *技能中心* entry | yes (`技能管理`) | no |
-| Injects a row into the sidebar by DOM surgery | yes | no — registers the official `sidebar.panellist` seat |
-| Shells out to `tar` / PowerShell `Expand-Archive` | yes | no — pure JS ZIP reader |
-| Hard-coded colours that ignore the theme | yes | no — `--dsw-alias-*` tokens only |
-| Opens as a centred overlay | yes | no — it is a first-class panel in the centre column |
-
-The sidebar row, its geometry, indent, label colour, hover state, collapsed
-rail and the panel switch are all owned by the DSH shell. The plugin only
-supplies an icon and a label, so the row lines up with its neighbours by
-construction and follows whatever theme is active — built-in, OpenCode palette,
-or a custom skin.
+- **Only public contracts.** `ctx.slots.inject(...)` / `ctx.slots.register(...)`
+  for UI seats, `ctx.connection.fetch.register(...)` for host routes,
+  `ctx.connection.rpc.call('/api', ...)` on the client. No DOM surgery, no
+  reaching into other plugins' styles, no patching the shell.
+- **Theme tokens only.** Every colour is a `--dsw-alias-*` token, so built-in
+  themes, the OpenCode palette and custom skins all work without special cases.
+- **Degrade, don't break.** Every `slots.inject` is wrapped, so a shell that
+  never declares a seat leaves the panel absent instead of failing boot.
+- **Pure-JS archive handling.** The ZIP reader walks the central directory and
+  inflates in memory; it never shells out and never writes a temp file.
+- **Path-safe installs.** Archive entry names are normalised and rejected if
+  they escape the target directory; slugs are validated before they reach the
+  filesystem.
 
 ## Install
 
@@ -100,7 +97,7 @@ dsh-skill-hub/
 ├── src/
 │   ├── index.js          # host half: RPC routes, HTTP clients, ZIP reader
 │   └── client.js         # browser half: sidebar row, panel page, picker
-└── LICENSE               # MIT, with the original author's notice kept
+└── LICENSE               # MIT
 ```
 
 The browser half is plain ES5-flavoured JavaScript wrapped in
@@ -117,11 +114,8 @@ The plugin only uses documented public contracts:
 - `--dsw-alias-*` theme tokens for every colour
 
 DSH is pre-1.0, so seats and tokens can still change. When that happens the
-plugin is meant to degrade rather than break: every `slots.inject` is wrapped
-so a shell that never declares the seat leaves the panel absent instead of
-failing boot.
+plugin is meant to degrade rather than break.
 
 ## License
 
-MIT. Original work Copyright (c) 2026 [pn1024](https://github.com/pn1024);
-rewrite and additions Copyright (c) 2026 [imFelixYang](https://github.com/imFelixYang).
+MIT — see [LICENSE](./LICENSE).
