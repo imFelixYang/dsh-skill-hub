@@ -761,9 +761,16 @@ const clawhub = {
     // the browse endpoint: same item shape, cursor-paged, and it actually
     // answers when q is absent. Use it for the empty-query case only, so a
     // real search keeps matching on relevance.
+    //
+    // The browse endpoint ignores `limit` on its default ordering and hands
+    // back an arbitrary slice (measured: 5, 28 or 73 rows for limit=50, and
+    // the count changes between calls). Passing an explicit sort makes it
+    // honour the limit and page deterministically — `sort=downloads` returned
+    // a stable 50 rows across repeats with no overlap between cursor pages.
     const useBrowse = !keyword
     const params = new URLSearchParams({ limit: String(pageSize) })
     if (useBrowse) {
+      params.set('sort', 'downloads')
       if (args.cursor) params.set('cursor', String(args.cursor))
     } else {
       params.set('q', keyword)
