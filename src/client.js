@@ -31,8 +31,8 @@ window.__ModuleLoader__.load({
 
     var DICT = {
       zh: {
-        "panel.title": "技能中心",
-        "tab.market": "技能市场",
+        "panel.title": "技能·专家",
+        "tab.market": "技能",
         "tab.experts": "专家",
         "tab.installed": "已安装",
         "experts.placeholder": "搜索专家…",
@@ -74,12 +74,14 @@ window.__ModuleLoader__.load({
         "toast.installed": "已安装「{name}」",
         "toast.uninstalled": "已卸载「{name}」",
         "toast.failed": "操作失败：{message}",
-        "composer.button": "技能",
-        "composer.hint": "插入一个技能指令"
+        "composer.button": "技能·专家",
+        "composer.hint": "技能·专家",
+        "composer.browseSkills": "浏览技能",
+        "composer.browseExperts": "浏览专家"
       },
       en: {
-        "panel.title": "Skills",
-        "tab.market": "Market",
+        "panel.title": "SkillAgency",
+        "tab.market": "Skills",
         "tab.experts": "Experts",
         "tab.installed": "Installed",
         "experts.placeholder": "Search experts…",
@@ -121,8 +123,10 @@ window.__ModuleLoader__.load({
         "toast.installed": "Installed “{name}”",
         "toast.uninstalled": "Uninstalled “{name}”",
         "toast.failed": "Action failed: {message}",
-        "composer.button": "Skills",
-        "composer.hint": "Insert a skill command"
+        "composer.button": "SkillAgency",
+        "composer.hint": "SkillAgency",
+        "composer.browseSkills": "Browse skills",
+        "composer.browseExperts": "Browse experts"
       }
     };
 
@@ -340,6 +344,8 @@ window.__ModuleLoader__.load({
       "background:transparent;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
       ".dsh-sh-composer-btn:hover{color:var(--dsw-alias-label-primary,#fff);",
       "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08))}",
+      ".dsh-sh-composer-btn.dsh-sh-composer-icon{padding:4px;width:26px;height:26px;",
+      "display:inline-flex;align-items:center;justify-content:center;border-radius:7px}",
       ".dsh-sh-picker{position:absolute;bottom:100%;left:0;margin-bottom:6px;width:280px;max-height:300px;",
       "overflow-y:auto;z-index:30;padding:6px;border-radius:11px;",
       "background:var(--dsw-alias-bg-module-platform,rgba(40,40,40,.98));",
@@ -351,6 +357,18 @@ window.__ModuleLoader__.load({
       ".dsh-sh-picker-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
       ".dsh-sh-picker-empty{padding:10px;font-size:12px;",
       "color:var(--dsw-alias-label-tertiary,#808080);text-align:center}",
+      ".dsh-sh-picker-tabs{display:flex;gap:4px;padding:2px 2px 6px}",
+      ".dsh-sh-picker-tab{appearance:none;font:inherit;font-size:12px;padding:5px 9px;border-radius:7px;",
+      "cursor:pointer;flex:1;color:var(--dsw-alias-label-secondary,#a0a0a0);background:transparent;",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
+      ".dsh-sh-picker-tab:hover{color:var(--dsw-alias-label-primary,#fff);",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08))}",
+      ".dsh-sh-picker-tab[data-active]{color:var(--dsw-alias-label-primary,#fff);font-weight:600;",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
+      ".dsh-sh-picker-search{display:block;width:100%;box-sizing:border-box;font:inherit;font-size:12px;",
+      "padding:5px 8px;margin-bottom:4px;border-radius:7px;outline:none;",
+      "color:var(--dsw-alias-label-primary,#e0e0e0);background:var(--dsw-alias-bg-base,rgba(0,0,0,.2));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
 
       "@media (max-width:720px){.dsh-sh-cats{display:none}}"
     ].join("");
@@ -567,8 +585,12 @@ window.__ModuleLoader__.load({
      * call surfaces the server's message instead of a generic failure.
      */
     function makeApi(rpc) {
+      // DSH's connection RPC is call(channel, endpoint, payload, signal). The
+      // channel is fixed and the endpoint is the pair after it, so a
+      // pre-joined "/api/skill-hub/x" string would land the payload object in
+      // the endpoint slot and fail inside the host's target validation.
       var call = function (endpoint, payload, signal) {
-        return rpc.call("/api/skill-hub/" + endpoint, payload || {}, signal).then(function (result) {
+        return rpc.call("/api", "skill-hub/" + endpoint, payload || {}, signal).then(function (result) {
           if (result && result.ok) return result.value;
           var message = (result && result.error && result.error.message) || t("error.generic");
           var error = new Error(message);
@@ -1772,12 +1794,22 @@ window.__ModuleLoader__.load({
     function ChatInputButton(props) {
       var rpc = props.rpc;
       var inputActions = props.inputActions;
+      var openPanel = props.openPanel;
       var openState = useState(false);
       var open = openState[0];
       var setOpen = openState[1];
       var skillsState = useState([]);
       var skills = skillsState[0];
       var setSkills = skillsState[1];
+      var rosterState = useState(null);
+      var roster = rosterState[0];
+      var setRoster = rosterState[1];
+      var pickerTabState = useState("skills");
+      var pickerTab = pickerTabState[0];
+      var setPickerTab = pickerTabState[1];
+      var queryState = useState("");
+      var query = queryState[0];
+      var setQuery = queryState[1];
       var containerRef = useRef(null);
 
       var api = useMemo(
@@ -1806,6 +1838,28 @@ window.__ModuleLoader__.load({
         [open, api]
       );
 
+      // The roster is only pulled when its tab is actually opened. It is a few
+      // hundred entries, which is wasteful for someone who only wants to reach
+      // a skill they already installed.
+      useEffect(
+        function () {
+          if (!open || pickerTab !== "experts" || roster) return undefined;
+          var controller = new AbortController();
+          api
+            .experts(controller.signal)
+            .then(function (value) {
+              setRoster((value && value.experts) || []);
+            })
+            .catch(function () {
+              setRoster([]);
+            });
+          return function () {
+            controller.abort();
+          };
+        },
+        [open, pickerTab, roster, api]
+      );
+
       useEffect(
         function () {
           if (!open) return undefined;
@@ -1821,12 +1875,23 @@ window.__ModuleLoader__.load({
       );
 
       var insertSkill = function (skill) {
-        var name = skill.slug || skill.name;
+        var name = skill.slug || skill.stem || skill.name;
         if (inputActions && typeof inputActions.setDraft === "function") {
           inputActions.setDraft("/" + name + " ");
         }
         setOpen(false);
       };
+
+      var expertRows = (roster || []).filter(function (expert) {
+        var needle = query.trim().toLowerCase();
+        if (!needle) return true;
+        return (
+          String(expert.name || "").toLowerCase().indexOf(needle) >= 0 ||
+          String(expert.stem || "").toLowerCase().indexOf(needle) >= 0
+        );
+      });
+
+      var rows = pickerTab === "experts" ? expertRows : skills;
 
       return h(
         "div",
@@ -1836,34 +1901,80 @@ window.__ModuleLoader__.load({
           "button",
           {
             type: "button",
-            className: "dsh-sh-composer-btn",
+            className: "dsh-sh-composer-btn dsh-sh-composer-icon",
             title: t("composer.hint"),
+            "aria-label": t("composer.button"),
             onClick: function () {
               setOpen(!open);
             }
           },
-          t("composer.button")
+          h(SkillHubIcon, { size: 14 })
         ),
         open
           ? h(
               "div",
               { className: "dsh-sh-picker" },
-              skills.length
-                ? skills.map(function (skill) {
+              h(
+                "div",
+                { className: "dsh-sh-picker-tabs" },
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-sh-picker-tab",
+                    "data-active": pickerTab === "skills" ? "" : undefined,
+                    onClick: function () {
+                      setPickerTab("skills");
+                    }
+                  },
+                  t("composer.browseSkills")
+                ),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-sh-picker-tab",
+                    "data-active": pickerTab === "experts" ? "" : undefined,
+                    onClick: function () {
+                      setPickerTab("experts");
+                    }
+                  },
+                  t("composer.browseExperts")
+                )
+              ),
+              pickerTab === "experts"
+                ? h("input", {
+                    className: "dsh-sh-picker-search",
+                    type: "search",
+                    value: query,
+                    placeholder: t("experts.placeholder"),
+                    onChange: function (event) {
+                      setQuery(event.target.value);
+                    }
+                  })
+                : null,
+              rows.length
+                ? rows.map(function (row) {
+                    var key = pickerTab === "experts" ? row.stem : row.slug;
+                    var label = pickerTab === "experts" ? row.name || row.stem : row.name || row.slug;
                     return h(
                       "button",
                       {
                         type: "button",
                         className: "dsh-sh-picker-item",
-                        key: skill.slug,
+                        key: key,
                         onClick: function () {
-                          insertSkill(skill);
+                          insertSkill(row);
                         }
                       },
-                      skill.name || skill.slug
+                      label
                     );
                   })
-                : h("div", { className: "dsh-sh-picker-empty" }, t("empty.installed"))
+                : h(
+                    "div",
+                    { className: "dsh-sh-picker-empty" },
+                    pickerTab === "experts" ? t("experts.noMatch") : t("empty.installed")
+                  )
             )
           : null
       );

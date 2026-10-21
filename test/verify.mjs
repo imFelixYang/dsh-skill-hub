@@ -147,6 +147,19 @@ for (const banned of [
   check(`client never uses ${banned}`, !clientSource.includes(banned));
 }
 
+// The host's connection RPC is a four-argument call: channel, endpoint, payload,
+// signal. Passing three hands the payload in as the endpoint, and the host's own
+// `endpoint.split("/")` throws before any route is reached — which is exactly
+// how the panel shipped once looking permanently empty.
+check(
+  "client calls rpc.call with the /api channel as the first argument",
+  /rpc\.call\(\s*"\/api"\s*,/.test(clientSource)
+);
+check(
+  "client endpoint is a relative path with no leading slash",
+  /rpc\.call\(\s*"\/api"\s*,\s*"skill-hub\/"\s*\+/.test(clientSource)
+);
+
 // Every colour must come from a theme token so the panel follows the active skin.
 const hardcodedColours = (clientSource.match(/(?:^|[\s:(])(?:#[0-9a-fA-F]{3,8})\b/g) || []).filter(Boolean);
 check(

@@ -1,9 +1,10 @@
-# dsh-skill-hub
+# SkillAgency
 
-A skill hub for **DeepSeek Harness**: search several public skill registries in
-one place, read a skill's README before installing it, and install / uninstall
-it into `$DSH_HOME/skills`. A second tab adds an **expert roster** — 300+
-role personas that install the same way and are picked from the same panel.
+**技能 · 专家** — a skill *and* expert hub for **DeepSeek Harness**: search
+several public skill registries in one place, read a skill's README before
+installing it, and install / uninstall it into `$DSH_HOME/skills`. A second tab
+adds an **expert roster** — 300+ role personas that install the same way and are
+picked from the same panel.
 
 It ships as a first-class DSH panel — the sidebar row, the centre-column page and
 the composer picker are all contributed through the shell's own slot contracts,
