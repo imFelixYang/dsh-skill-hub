@@ -77,7 +77,10 @@ window.__ModuleLoader__.load({
         "composer.button": "技能·专家",
         "composer.hint": "技能·专家",
         "composer.browseSkills": "浏览技能",
-        "composer.browseExperts": "浏览专家"
+        "composer.browseExperts": "浏览专家",
+        "diag.rows": "条",
+        "diag.failed": "失败",
+        "diag.noCategory": "不支持分类筛选"
       },
       en: {
         "panel.title": "SkillAgency",
@@ -126,7 +129,10 @@ window.__ModuleLoader__.load({
         "composer.button": "SkillAgency",
         "composer.hint": "SkillAgency",
         "composer.browseSkills": "Browse skills",
-        "composer.browseExperts": "Browse experts"
+        "composer.browseExperts": "Browse experts",
+        "diag.rows": "rows",
+        "diag.failed": "failed",
+        "diag.noCategory": "no category filter"
       }
     };
 
@@ -343,6 +349,9 @@ window.__ModuleLoader__.load({
       "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.05));",
       "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
 
+      ".dsh-sh-diag{margin-top:6px;display:flex;flex-direction:column;gap:2px;",
+      "font-size:12px;color:var(--dsw-alias-label-tertiary,#808080);",
+      "font-family:ui-monospace,SFMono-Regular,Menlo,monospace}",
       ".dsh-sh-spinner{width:16px;height:16px;border-radius:50%;",
       "border:2px solid var(--dsw-alias-border-l1,rgba(255,255,255,.18));",
       "border-top-color:var(--dsw-alias-brand-primary,#6366f1);animation:dsh-sh-spin .7s linear infinite}",
@@ -958,6 +967,13 @@ window.__ModuleLoader__.load({
       var sourceErrors = sourceErrorsState[0];
       var setSourceErrors = sourceErrorsState[1];
 
+      // Per-source outcome of the last search: how many rows each registry
+      // returned and whether it failed. Shown when the grid is empty, because
+      // "no match" and "every source is down" must not look the same.
+      var diagnosticsState = useState([]);
+      var diagnostics = diagnosticsState[0];
+      var setDiagnostics = diagnosticsState[1];
+
       var detailState = useState(null);
       var detail = detailState[0];
       var setDetail = detailState[1];
@@ -1060,6 +1076,7 @@ window.__ModuleLoader__.load({
               setHasMore(!!(value && value.hasMore));
               setPage(nextPage);
               setSourceErrors((value && value.errors) || []);
+              setDiagnostics((value && value.diagnostics) || []);
             })
             .catch(function (failure) {
               if (requestRef.current !== token) return;
@@ -1311,7 +1328,37 @@ window.__ModuleLoader__.load({
           "div",
           { className: "dsh-sh-state" },
           h("div", null, t("empty.market")),
-          h("div", null, t("empty.hint"))
+          h("div", null, t("empty.hint")),
+          diagnostics.length
+            ? h(
+                "div",
+                { className: "dsh-sh-diag" },
+                diagnostics.map(function (entry) {
+                  return h(
+                    "div",
+                    { key: entry.source },
+                    entry.source +
+                      ": " +
+                      (entry.error
+                        ? t("diag.failed") + " · " + entry.error
+                        : entry.skipped === "no-category"
+                          ? t("diag.noCategory")
+                          : entry.count + " " + t("diag.rows"))
+                  );
+                })
+              )
+            : null,
+          h(
+            "button",
+            {
+              type: "button",
+              className: "dsh-sh-btn",
+              onClick: function () {
+                runSearch(1, false);
+              }
+            },
+            t("action.retry")
+          )
         );
       } else {
         marketBody = h(

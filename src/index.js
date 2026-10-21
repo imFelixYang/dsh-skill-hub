@@ -1787,6 +1787,16 @@ async function searchAcross(config, args, signal) {
   const totalKnown = outcomes.reduce((sum, outcome) => sum + (outcome.total || 0), 0)
   const hasMore = outcomes.some((outcome) => outcome.hasMore)
 
+  // Per-source outcome, so an empty grid can say *why* it is empty. Without it
+  // "all sources failed" and "nothing matched" render the same, and the panel
+  // looks broken with no way to tell what happened.
+  const diagnostics = outcomes.map((outcome) => ({
+    source: outcome.sourceId,
+    count: outcome.items.length,
+    skipped: outcome.skipped || '',
+    error: outcome.error || ''
+  }))
+
   return {
     items: unique.slice(0, pageSize),
     total: totalKnown || merged.length,
@@ -1794,7 +1804,8 @@ async function searchAcross(config, args, signal) {
     pageSize,
     hasMore: !!hasMore,
     sources: requested,
-    errors
+    errors,
+    diagnostics
   }
 }
 
