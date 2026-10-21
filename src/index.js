@@ -624,13 +624,6 @@ const skillhub = {
       // happen to reuse the same slug as two separate skills.
       upstreamUrl: row.upstream_url || '',
       namespaceKey: (row.namespace && row.namespace.canonicalName) || '',
-      // The registry publishes `labels.requires_api_key` per row. It is the only
-      // machine-readable "needs credentials" signal, so it drives the API-key
-      // filter. Absent labels mean "not declared", not "no key needed".
-      requiresApiKey:
-        row.labels && typeof row.labels.requires_api_key === 'boolean'
-          ? row.labels.requires_api_key
-          : null,
       installed: installName.has(String(row.slug).toLowerCase())
     }))
 
@@ -1380,7 +1373,6 @@ function parseExpertRoster(text) {
 }
 
 let expertCache = { key: '', at: 0, value: null }
-let expertPackageCache = { at: 0, list: [] }
 
 async function loadExpertCatalog(config, signal) {
   const repoSpec = parseRepoRef(config.expertsRepo)
@@ -1413,41 +1405,6 @@ async function loadExpertCatalog(config, signal) {
   }
   expertCache = { key, at: Date.now(), value }
   return value
-}
-
-/**
- * SkillHub's own "expert packages" (skillhub.cn/skillspackage). Only the list
- * and its version history are public: every content/download route answers 405
- * because these bundles target other clients (agentchat, clawpro). They are
- * therefore shown read-only instead of pretending they can be installed.
- */
-async function loadExpertPackages(config, signal) {
-  if (config.enableExpertPackages === false) return []
-  const fresh = Date.now() - expertPackageCache.at < config.cacheTtlMs
-  if (fresh && expertPackageCache.list.length) return expertPackageCache.list
-
-  try {
-    const payload = await getJson(joinUrl(config.skillhubApiBase, '/api/v1/expert-packages'), {
-      timeoutMs: config.sourceTimeoutMs,
-      signal
-    })
-    const rows = Array.isArray(payload.packages) ? payload.packages : []
-    const list = rows
-      .filter((row) => row && row.packageId)
-      .map((row) => ({
-        packageId: row.packageId,
-        name: row.name || row.packageId,
-        summary: row.description || '',
-        logoUrl: row.logoUrl || '',
-        version: row.latestVersion || '',
-        publishedAt: Number(row.publishedAt || 0)
-      }))
-    expertPackageCache = { at: Date.now(), list }
-    return list
-  } catch {
-    // A missing package list must not take the roster down with it.
-    return expertPackageCache.list || []
-  }
 }
 
 function yamlScalar(value) {
@@ -1565,17 +1522,19 @@ const experts = {
   }
 }
 
-const SOURCES = { skillhub, clawhub, github, experts }
+// `github` and `experts` are intentionally absent from the search set: GitHub
+// was the noisiest catalogue for little gain, and the expert roster is browsed
+// through its own route rather than keyword search.
+const SOURCES = { skillhub, clawhub, experts }
 
 // ── aggregation ─────────────────────────────────────────────────────────────
 
 /**
  * When two catalogues hold the same skill, the higher-ranked source wins.
  * SkillHub outranks ClawHub because it carries Chinese descriptions and a
- * mirror relationship to ClawHub; GitHub is last because its rows are the
- * thinnest (no downloads, no summary until the detail call).
+ * mirror relationship to ClawHub.
  */
-const SOURCE_RANK = { skillhub: 0, clawhub: 1, github: 2 }
+const SOURCE_RANK = { skillhub: 0, clawhub: 1 }
 
 /** Lower-case and strip everything that only varies by formatting. */
 function foldText(value) {
@@ -1709,7 +1668,6 @@ function resolveSourceList(config) {
   const list = []
   if (config.enableSkillHub) list.push('skillhub')
   if (config.enableClawHub) list.push('clawhub')
-  if (config.enableGitHub) list.push('github')
   return list
 }
 
@@ -1721,12 +1679,6 @@ async function searchAcross(config, args, signal) {
   const requested = args.source && SOURCES[args.source] ? [args.source] : resolveSourceList(config)
   const page = toPositiveInt(args.page, 1, 200)
   const pageSize = toPositiveInt(args.pageSize, 30, 60)
-
-  // "requires an API key" is published per row but is not a query parameter the
-  // registry honours, so it has to be applied after fetching. Asking for a wider
-  // slice keeps a filtered page from coming back mostly empty.
-  const apiKeyFilter = args.apiKey === 'required' || args.apiKey === 'none' ? args.apiKey : ''
-  const fetchSize = apiKeyFilter ? Math.min(pageSize * 3, 100) : pageSize
 
   const outcomes = await Promise.all(
     requested.map(async (sourceId) => {
@@ -1740,7 +1692,7 @@ async function searchAcross(config, args, signal) {
         return { sourceId, items: [], skipped: 'no-category' }
       }
       try {
-        const result = await adapter.search(config, { ...args, page, pageSize: fetchSize }, signal)
+        const result = await adapter.search(config, { ...args, page, pageSize }, signal)
         return { sourceId, items: result.items || [], total: result.total, hasMore: result.hasMore }
       } catch (error) {
         if (isAbort(error) && signal && signal.aborted) throw error
@@ -1831,16 +1783,8 @@ async function searchAcross(config, args, signal) {
   const totalKnown = outcomes.reduce((sum, outcome) => sum + (outcome.total || 0), 0)
   const hasMore = outcomes.some((outcome) => outcome.hasMore)
 
-  // `required` keeps only rows that declare they need a key; `none` keeps every
-  // row that does not declare one, because silence is not a requirement.
-  const filtered = apiKeyFilter
-    ? unique.filter((item) =>
-        apiKeyFilter === 'required' ? item.requiresApiKey === true : item.requiresApiKey !== true
-      )
-    : unique
-
   return {
-    items: filtered.slice(0, pageSize),
+    items: unique.slice(0, pageSize),
     total: totalKnown || merged.length,
     page,
     pageSize,
@@ -2137,11 +2081,9 @@ function resolveConfig(config = {}) {
     enableSkillHub: config.enableSkillHub !== false,
     // Two channels, matching the catalogue they mirror: SkillHub (Chinese
     // metadata, and it already mirrors most of ClawHub) plus ClawHub itself.
-    // GitHub repos stay supported but off by default — their metadata is
-    // English-only and duplicated what the other two carry, so the grid read
-    // as noise. Turn them on with `enableGitHub` in the patch.
+    // The GitHub source was retired: its rows are English-only, duplicated what
+    // the other two carry, and read as noise in the grid.
     enableClawHub: config.enableClawHub !== false,
-    enableGitHub: config.enableGitHub === true,
     skillhubMirrors: parseMirrorList(config.skillhubMirrors, config.skillhubApiBase),
     githubRepos: parseRepoList(config.githubRepos || DEFAULT_GITHUB_REPOS),
     expertsRepo:
@@ -2149,7 +2091,6 @@ function resolveConfig(config = {}) {
         ? config.expertsRepo.trim()
         : DEFAULT_EXPERTS_REPO,
     enableExperts: config.enableExperts !== false,
-    enableExpertPackages: config.enableExpertPackages !== false,
     sourceTimeoutMs: toPositiveInt(config.sourceTimeoutMs, 8000, 60000),
     downloadTimeoutMs: toPositiveInt(config.downloadTimeoutMs, 60000, 300000),
     cacheTtlMs: toPositiveInt(config.cacheTtlMs, 600000, 86400000)
@@ -2179,16 +2120,12 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
 
     case 'experts': {
       if (!resolved.enableExperts) return ok({ repo: '', ref: '', departments: [], experts: [], total: 0 })
-      const [catalog, packages] = await Promise.all([
-        loadExpertCatalog(resolved, signal),
-        loadExpertPackages(resolved, signal)
-      ])
+      const catalog = await loadExpertCatalog(resolved, signal)
       const installed = new Set(
         listLocalSkills(resolveSkillsDir(resolved)).map((item) => item.slug.toLowerCase())
       )
       return ok({
         ...catalog,
-        packages,
         experts: catalog.experts.map((expert) => ({
           ...expert,
           installed: installed.has(expert.stem.toLowerCase())

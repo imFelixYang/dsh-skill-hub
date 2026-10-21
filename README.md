@@ -13,23 +13,16 @@ by DSH and follow whichever theme is active.
 
 ## What it does
 
-- **One search box, several registries** — queried in parallel, merged, and
-  de-duplicated by slug, with installed skills pinned first:
+- **One search box, two registries** — queried in parallel, merged, and
+  de-duplicated, with installed skills pinned first:
   - **SkillHub** (`api.skillhub.tencent.com`) — fast in mainland China, ~21k
-    skills, Chinese summaries and category filters.
+    skills, Chinese summaries and category filters. It also mirrors most of
+    ClawHub, so the two lists overlap heavily and are folded together.
   - **ClawHub** (`clawhub.ai`) — the OpenClaw registry.
-  - **GitHub skill repos** (optional, off by default) — any repo laid out as
-    `<dir>/SKILL.md`. Four ship configured (`anthropics/skills`,
-    `obra/superpowers`, `rohitg00/awesome-claude-code-toolkit`,
-    `ComposioHQ/awesome-claude-skills`) for when you want them; set
-    `enableGitHub: true` to include the source, and `githubRepos` accepts any
-    list of your own.
-- **Needs-an-API-key filter** — SkillHub labels some skills as requiring a key.
-  The filter runs locally (the upstream search API has no such parameter), so
-  you can hide those without leaving the panel.
 - **Chinese first** — SkillHub's `description_zh` and Chinese skill names are
-  preferred when present, and the category list is shown in Chinese. The UI
-  itself is localised (中文 / English, following DSH's locale).
+  preferred when present, and the category list is shown in Chinese. The
+  interface itself is Chinese, by product decision: the audience is Chinese and
+  a half-translated panel read worse than a single language.
 - **Fast by default** — sources are fetched concurrently rather than in
   sequence, a slow registry can no longer stall the whole search, and a short
   timeout plus a warm cache keep repeat searches instant.
@@ -74,6 +67,11 @@ A few properties this plugin holds itself to:
   hosts answered in 17–20 seconds (or timed out) while the API answered in
   under a second. The roster is two small documents, so the quota cost is
   bounded and `githubToken` lifts it when needed.
+- **Fewer sources, on purpose.** A third catalogue (arbitrary GitHub repos) was
+  implemented and then removed: its rows carried no downloads, no Chinese
+  summary, and mostly duplicated what SkillHub already mirrored, so it made the
+  grid look busy without making it more useful. Two well-described catalogues
+  beat three overlapping ones.
 
 ## Install
 
@@ -103,19 +101,15 @@ the DSH plugin settings:
 | `skillhubApiBase` | `https://api.skillhub.tencent.com` | SkillHub endpoint |
 | `skillhubMirrors` | `api.skillhub.tencent.com`, `api.skillhub.cn` | Tried in order; the first that answers wins, so a blocked or slow host degrades instead of failing |
 | `clawhubApiBase` | `https://clawhub.ai` | ClawHub endpoint (`clawhub.com` just 307s here) |
-| `githubRepos` | four repos, comma-separated | `owner/repo@ref` entries to search; order is priority for duplicate skill names |
-| `githubApiBase` | `https://api.github.com` | Used to list each repo's file tree |
-| `githubRawBase` | `https://raw.githubusercontent.com` | Used to fetch `SKILL.md` and skill files |
+| `githubApiBase` | `https://api.github.com` | Used to read the expert roster's Markdown files |
+| `githubRawBase` | `https://raw.githubusercontent.com` | Fallback host for those same files |
 | `githubToken` | `''` | Optional GitHub token; raises the 60-requests/hour anonymous limit |
-| `jsdelivrDataApi` | `https://data.jsdelivr.com` | Fallback tree listing when GitHub's quota is exhausted |
-| `jsdelivrCdn` | `https://cdn.jsdelivr.net` | Fallback file host when raw.githubusercontent is unreachable |
+| `jsdelivrCdn` | `https://cdn.jsdelivr.net` | Last-resort file host when both above fail |
 | `localSkillsDir` | `''` | Where to install; empty means `$DSH_HOME/skills` |
 | `enableSkillHub` | `true` | Turn the SkillHub source on or off |
 | `enableClawHub` | `true` | Turn the ClawHub source on or off |
-| `enableGitHub` | `false` | Turn the GitHub source on or off (opt-in: it is the noisiest source and its anonymous quota is small) |
 | `expertsRepo` | `jnMetaCode/agency-agents-zh@main` | Roster repo for the Experts tab (`owner/repo@ref`) |
 | `enableExperts` | `true` | Turn the Experts tab on or off |
-| `enableExpertPackages` | `true` | Show SkillHub's expert packages (metadata only) in the Experts tab |
 | `sourceTimeoutMs` | `8000` | Per-source budget before it is reported as slow and skipped |
 | `downloadTimeoutMs` | `60000` | Budget for downloading a skill archive |
 | `cacheTtlMs` | `600000` | How long tree listings and detail responses stay warm |

@@ -77,12 +77,7 @@ window.__ModuleLoader__.load({
         "composer.button": "技能·专家",
         "composer.hint": "技能·专家",
         "composer.browseSkills": "浏览技能",
-        "composer.browseExperts": "浏览专家",
-        "apikey.all": "不限 API Key",
-        "apikey.required": "需要 API Key",
-        "apikey.none": "无需 API Key",
-        "experts.packages": "SkillHub 专家包",
-        "experts.packagesHint": "由 SkillHub 官方提供，面向 agentchat / clawpro 等客户端，目前不开放第三方直接安装，仅作展示。"
+        "composer.browseExperts": "浏览专家"
       },
       en: {
         "panel.title": "SkillAgency",
@@ -131,12 +126,7 @@ window.__ModuleLoader__.load({
         "composer.button": "SkillAgency",
         "composer.hint": "SkillAgency",
         "composer.browseSkills": "Browse skills",
-        "composer.browseExperts": "Browse experts",
-        "apikey.all": "Any API key",
-        "apikey.required": "Needs API key",
-        "apikey.none": "No API key",
-        "experts.packages": "SkillHub expert packages",
-        "experts.packagesHint": "Published by SkillHub for the agentchat / clawpro clients. Their contents are not downloadable by third parties, so these are shown for reference only."
+        "composer.browseExperts": "Browse experts"
       }
     };
 
@@ -375,11 +365,7 @@ window.__ModuleLoader__.load({
       ".dsh-sh-composer-btn.dsh-sh-composer-icon{padding:4px;width:26px;height:26px;",
       "display:inline-flex;align-items:center;justify-content:center;border-radius:7px}",
       ".dsh-sh-bolt{font-size:15px;line-height:1;display:inline-block}",
-      ".dsh-sh-apikey-row{margin-top:6px}",
-      ".dsh-sh-pkg-logo{width:22px;height:22px;border-radius:5px;object-fit:contain;display:block}",
-      ".dsh-sh-pkg-ver{font-size:11px;flex:none;padding:1px 6px;border-radius:999px;",
-      "color:var(--dsw-alias-label-tertiary,#9a9a9a);",
-      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
+      ".dsh-sh-tab-inner{display:inline-flex;align-items:center;gap:6px}",
       ".dsh-sh-picker{position:absolute;bottom:100%;left:0;margin-bottom:6px;width:280px;max-height:300px;",
       "overflow-y:auto;z-index:30;padding:6px;border-radius:11px;",
       "background:var(--dsw-alias-bg-module-platform,rgba(40,40,40,.98));",
@@ -774,13 +760,6 @@ window.__ModuleLoader__.load({
         h("div", { className: "dsh-sh-card-desc" }, pickSummary(skill) || "—"),
         h(
           "div",
-          { className: "dsh-sh-card-tags" },
-          skill.requiresApiKey === true
-            ? h("span", { className: "dsh-sh-tag", "data-tone": "warn" }, t("apikey.required"))
-            : null
-        ),
-        h(
-          "div",
           { className: "dsh-sh-card-foot" },
           skill.downloads ? h("span", null, "↓ " + formatCount(skill.downloads)) : null,
           skill.installed
@@ -924,11 +903,6 @@ window.__ModuleLoader__.load({
       var activeSource = sourceState[0];
       var setActiveSource = sourceState[1];
 
-      // "" = no preference, "required" = declares an API key, "none" = does not.
-      var apiKeyState = useState("");
-      var activeApiKey = apiKeyState[0];
-      var setActiveApiKey = apiKeyState[1];
-
       var categoryState = useState("");
       var activeCategory = categoryState[0];
       var setActiveCategory = categoryState[1];
@@ -1060,8 +1034,7 @@ window.__ModuleLoader__.load({
             page: nextPage,
             pageSize: 30,
             source: activeSource || undefined,
-            category: activeCategory || undefined,
-            apiKey: activeApiKey || undefined
+            category: activeCategory || undefined
           };
 
           return api
@@ -1096,7 +1069,7 @@ window.__ModuleLoader__.load({
               if (requestRef.current === token) setLoading(false);
             });
         },
-        [api, keyword, activeSource, activeCategory, activeApiKey]
+        [api, keyword, activeSource, activeCategory]
       );
 
       // Debounce typing; switch a filter and the search fires immediately.
@@ -1110,7 +1083,7 @@ window.__ModuleLoader__.load({
             clearTimeout(timer);
           };
         },
-        [tab, keyword, activeSource, activeCategory, activeApiKey, runSearch]
+        [tab, keyword, activeSource, activeCategory, runSearch]
       );
 
       // The installed list is only fetched when its tab is actually opened.
@@ -1463,11 +1436,6 @@ window.__ModuleLoader__.load({
         });
       }
 
-      // SkillHub's own expert bundles are listed for discovery only: their
-      // content routes are closed to third-party clients, so there is no install
-      // button for them.
-      var expertPackages = (roster && roster.packages) || [];
-
       var renderExpertRow = function (expert) {
         var installing = isBusy(expert, "install");
         return h(
@@ -1559,40 +1527,7 @@ window.__ModuleLoader__.load({
               group.label ? h("div", { className: "dsh-sh-group-title" }, group.label) : null,
               group.experts.map(renderExpertRow)
             );
-          }),
-          expertPackages.length
-            ? h(
-                "div",
-                { key: "skillhub-packages" },
-                h("div", { className: "dsh-sh-group-title" }, t("experts.packages")),
-                expertPackages.map(function (pkg) {
-                  return h(
-                    "div",
-                    { className: "dsh-sh-row", key: "pkg-" + pkg.packageId },
-                    h(
-                      "span",
-                      { className: "dsh-sh-expert-emoji", "aria-hidden": "true" },
-                      pkg.logoUrl
-                        ? h("img", {
-                            className: "dsh-sh-pkg-logo",
-                            src: pkg.logoUrl,
-                            alt: "",
-                            loading: "lazy"
-                          })
-                        : "📦"
-                    ),
-                    h(
-                      "div",
-                      { className: "dsh-sh-row-body" },
-                      h("div", { className: "dsh-sh-row-title" }, pkg.name),
-                      h("div", { className: "dsh-sh-row-desc" }, pkg.summary || pkg.packageId)
-                    ),
-                    pkg.version ? h("span", { className: "dsh-sh-pkg-ver" }, pkg.version) : null
-                  );
-                }),
-                h("div", { className: "dsh-sh-expert-note" }, t("experts.packagesHint"))
-              )
-            : null
+          })
         );
       }
 
@@ -1642,7 +1577,12 @@ window.__ModuleLoader__.load({
           h(
             "div",
             { className: "dsh-sh-title-row" },
-            h("h1", { className: "dsh-sh-heading" }, t("panel.title")),
+            h(
+              "h1",
+              { className: "dsh-sh-heading dsh-sh-tab-inner" },
+              h(SkillHubIcon, { size: 17 }),
+              t("panel.title")
+            ),
             h(
               "div",
               { className: "dsh-sh-tabs", role: "tablist" },
@@ -1658,7 +1598,12 @@ window.__ModuleLoader__.load({
                     setDetail(null);
                   }
                 },
-                t("tab.market")
+                h(
+                  "span",
+                  { className: "dsh-sh-tab-inner" },
+                  h(SkillHubIcon, { size: 14 }),
+                  t("tab.market")
+                )
               ),
               h(
                 "button",
@@ -1672,7 +1617,12 @@ window.__ModuleLoader__.load({
                     setDetail(null);
                   }
                 },
-                t("tab.experts")
+                h(
+                  "span",
+                  { className: "dsh-sh-tab-inner" },
+                  h(ExpertIcon, { size: 14 }),
+                  t("tab.experts")
+                )
               ),
               h(
                 "button",
@@ -1686,7 +1636,12 @@ window.__ModuleLoader__.load({
                     setDetail(null);
                   }
                 },
-                t("tab.installed")
+                h(
+                  "span",
+                  { className: "dsh-sh-tab-inner" },
+                  h(InstalledIcon, { size: 14 }),
+                  t("tab.installed")
+                )
               )
             )
           ),
@@ -1752,30 +1707,6 @@ window.__ModuleLoader__.load({
                         }
                       },
                       source.label || source.id
-                    );
-                  })
-                ),
-                h(
-                  "div",
-                  { className: "dsh-sh-sources dsh-sh-apikey-row" },
-                  [
-                    ["", t("apikey.all")],
-                    ["required", t("apikey.required")],
-                    ["none", t("apikey.none")]
-                  ].map(function (pair) {
-                    return h(
-                      "button",
-                      {
-                        type: "button",
-                        className: "dsh-sh-chip",
-                        key: "apikey-" + pair[0],
-                        "data-active": activeApiKey === pair[0] ? "" : undefined,
-                        onClick: function () {
-                          setActiveApiKey(pair[0]);
-                          setDetail(null);
-                        }
-                      },
-                      pair[1]
                     );
                   })
                 )
@@ -1898,6 +1829,51 @@ window.__ModuleLoader__.load({
           style: { display: "block" }
         },
         h("path", { d: "M9 1.5L3 9h4.5l-1 5.5L13 7H8.5l.5-5.5z" })
+      );
+    }
+
+    /** A person silhouette, for the expert roster tab. */
+    function ExpertIcon(props) {
+      var size = (props && props.size) || 16;
+      return h(
+        "svg",
+        {
+          viewBox: "0 0 16 16",
+          width: size,
+          height: size,
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "1.3",
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          "aria-hidden": "true",
+          focusable: "false",
+          style: { display: "block" }
+        },
+        h("circle", { cx: "8", cy: "5.2", r: "2.5" }),
+        h("path", { d: "M3.4 13.6c0-2.5 2.1-4.1 4.6-4.1s4.6 1.6 4.6 4.1" })
+      );
+    }
+
+    /** A check mark, for the installed tab. */
+    function InstalledIcon(props) {
+      var size = (props && props.size) || 16;
+      return h(
+        "svg",
+        {
+          viewBox: "0 0 16 16",
+          width: size,
+          height: size,
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "1.4",
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          "aria-hidden": "true",
+          focusable: "false",
+          style: { display: "block" }
+        },
+        h("path", { d: "M3 8.4l3.3 3.3L13 5" })
       );
     }
 

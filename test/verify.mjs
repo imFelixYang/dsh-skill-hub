@@ -218,21 +218,8 @@ const callRoute = async (name, payload) => {
   return res.json();
 };
 
-// GitHub is off by default now (SkillHub + ClawHub is the shipping pair), so the
-// tests that exercise it register a second host with the switch turned on. Each
-// apply writes into whatever route list its ctx carries, so this stays isolated.
-const routesGithub = [];
-host.apply(
-  { connection: { fetch: { register: (spec) => routesGithub.push(spec) } }, skills: {} },
-  { localSkillsDir: scratchSkills, enableGitHub: true }
-);
-const routeOfGithub = (name) => routesGithub.find((r) => r.path === `/api/skill-hub/${name}`);
-const callRouteGithub = async (name, payload) => {
-  const res = await routeOfGithub(name).fetch(
-    new Request("http://x", { method: "POST", body: JSON.stringify({ rpcId: "t", payload: { args: payload } }) })
-  );
-  return res.json();
-};
+// GitHub was retired as a source (see README): the shipping pair is SkillHub
+// plus ClawHub, and nothing else registers a searchable catalogue.
 
 const searchRoute = routeOf("search");
 const getResponse = await searchRoute.fetch(new Request("http://x/api/skill-hub/search", { method: "GET" }));
@@ -321,22 +308,18 @@ globalThis.fetch = async (url) => {
   throw new Error(`unexpected fetch: ${target}`);
 };
 
-const searchOut = await callRouteGithub("search", { keyword: "", pageSize: 30 });
+const searchOut = await callRoute("search", { keyword: "", pageSize: 30 });
 check("search resolves even with a dead source", searchOut.result?.ok === true, JSON.stringify(searchOut.result?.error));
 
 const searchValue = searchOut.result?.value || {};
 const foundSources = new Set((searchValue.items || []).map((item) => item.source));
 check("SkillHub items survive", foundSources.has("skillhub"), JSON.stringify([...foundSources]));
-check("GitHub items survive", foundSources.has("github"), JSON.stringify([...foundSources]));
 check(
   "the dead source is reported, not hidden",
   (searchValue.errors || []).some((entry) => entry.source === "clawhub"),
   JSON.stringify(searchValue.errors)
 );
 
-const githubItem = (searchValue.items || []).find((item) => item.source === "github");
-check("GitHub item carries the fields install needs", !!githubItem && !!githubItem.owner && !!githubItem.repoPath && !!githubItem.repoRef, JSON.stringify(githubItem));
-check("GitHub install slug is a single safe segment", !!githubItem && !/[\\/]/.test(githubItem.slug), githubItem?.slug);
 check(
   "Chinese summary is preferred when present",
   (searchValue.items || []).some((item) => item.summaryZh === "处理 PDF 文件")
@@ -344,8 +327,6 @@ check(
 
 const sourcesOut = await callRoute("sources", {});
 check("sources route lists the two shipping catalogues", (sourcesOut.result?.value?.sources || []).length === 2, JSON.stringify((sourcesOut.result?.value?.sources || []).map((entry) => entry.id)));
-const sourcesGithubOut = await callRouteGithub("sources", {});
-check("enabling GitHub adds a third catalogue", (sourcesGithubOut.result?.value?.sources || []).length === 3);
 check(
   "SkillHub is the only category-aware source",
   (sourcesOut.result?.value?.sources || []).filter((entry) => entry.supportsCategory).map((entry) => entry.id).join(",") ===
@@ -418,7 +399,7 @@ globalThis.fetch = async (url) => {
   throw new Error(`unexpected fetch: ${target}`);
 };
 
-const dedupeOut = await callRouteGithub("search", { keyword: "", pageSize: 30 });
+const dedupeOut = await callRoute("search", { keyword: "", pageSize: 30 });
 const dedupeItems = dedupeOut.result?.value?.items || [];
 const bySlug = (slug) => dedupeItems.filter((item) => item.slug === slug);
 
@@ -436,10 +417,6 @@ check(
   "two unrelated skills with a shared slug are both kept",
   bySlug("github").length === 2,
   JSON.stringify(bySlug("github").map((i) => i.name))
-);
-check(
-  "the de-duplicated list still carries the GitHub row",
-  dedupeItems.some((item) => item.source === "github")
 );
 
 // ── 6c. A second install must not delete the first ───────────────────

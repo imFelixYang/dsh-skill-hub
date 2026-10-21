@@ -5,18 +5,16 @@
 # claims the official `sidebar.panellist` + `main` seats, so the skill centre is
 # a first-class panel rather than an overlay.
 #
-# Two catalogues ship on by default and are queried in parallel:
+# Two catalogues ship and are queried in parallel:
 #   skillhub  api.skillhub.tencent.com  (fast in mainland China; mirrors ClawHub)
 #   clawhub   clawhub.ai                (the OpenClaw registry)
 #
-# The GitHub source is still implemented but off by default: it is the noisiest
-# of the three and its anonymous quota is only 60 requests/hour. Set
-# enableGitHub: true to bring it back.
+# A third GitHub-repo catalogue was implemented and removed: its rows were
+# English-only, carried no download counts and largely duplicated SkillHub, so
+# it added noise rather than reach.
 #
 # A fourth catalogue, the expert roster, is browsed rather than searched: it is
-# served whole by /api/skill-hub/experts and stays out of keyword search. The
-# same route also reports SkillHub's expert packages (metadata only — that
-# upstream publishes no downloadable archive).
+# served whole by /api/skill-hub/experts and stays out of keyword search.
 - insert:
     - id: dsh-skill-hub
       name: 'dsh-skill-hub'
@@ -26,15 +24,8 @@
           - https://api.skillhub.tencent.com
           - https://api.skillhub.cn
         clawhubApiBase: https://clawhub.ai
-        githubRepos: >-
-          anthropics/skills@main,
-          obra/superpowers@main,
-          rohitg00/awesome-claude-code-toolkit@main,
-          ComposioHQ/awesome-claude-skills@master
         expertsRepo: jnMetaCode/agency-agents-zh@main
         localSkillsDir: ''
         enableSkillHub: true
         enableClawHub: true
-        enableGitHub: false
         enableExperts: true
-        enableExpertPackages: true
