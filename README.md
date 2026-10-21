@@ -18,10 +18,15 @@ by DSH and follow whichever theme is active.
   - **SkillHub** (`api.skillhub.tencent.com`) — fast in mainland China, ~21k
     skills, Chinese summaries and category filters.
   - **ClawHub** (`clawhub.ai`) — the OpenClaw registry.
-  - **GitHub skill repos** — any repo laid out as `<dir>/SKILL.md`. Four ship by
-    default (`anthropics/skills`, `obra/superpowers`,
-    `rohitg00/awesome-claude-code-toolkit`, `ComposioHQ/awesome-claude-skills`),
-    and `githubRepos` accepts any list of your own.
+  - **GitHub skill repos** (optional, off by default) — any repo laid out as
+    `<dir>/SKILL.md`. Four ship configured (`anthropics/skills`,
+    `obra/superpowers`, `rohitg00/awesome-claude-code-toolkit`,
+    `ComposioHQ/awesome-claude-skills`) for when you want them; set
+    `enableGitHub: true` to include the source, and `githubRepos` accepts any
+    list of your own.
+- **Needs-an-API-key filter** — SkillHub labels some skills as requiring a key.
+  The filter runs locally (the upstream search API has no such parameter), so
+  you can hide those without leaving the panel.
 - **Chinese first** — SkillHub's `description_zh` and Chinese skill names are
   preferred when present, and the category list is shown in Chinese. The UI
   itself is localised (中文 / English, following DSH's locale).
@@ -96,6 +101,7 @@ the DSH plugin settings:
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `skillhubApiBase` | `https://api.skillhub.tencent.com` | SkillHub endpoint |
+| `skillhubMirrors` | `api.skillhub.tencent.com`, `api.skillhub.cn` | Tried in order; the first that answers wins, so a blocked or slow host degrades instead of failing |
 | `clawhubApiBase` | `https://clawhub.ai` | ClawHub endpoint (`clawhub.com` just 307s here) |
 | `githubRepos` | four repos, comma-separated | `owner/repo@ref` entries to search; order is priority for duplicate skill names |
 | `githubApiBase` | `https://api.github.com` | Used to list each repo's file tree |
@@ -106,9 +112,10 @@ the DSH plugin settings:
 | `localSkillsDir` | `''` | Where to install; empty means `$DSH_HOME/skills` |
 | `enableSkillHub` | `true` | Turn the SkillHub source on or off |
 | `enableClawHub` | `true` | Turn the ClawHub source on or off |
-| `enableGitHub` | `true` | Turn the GitHub source on or off |
+| `enableGitHub` | `false` | Turn the GitHub source on or off (opt-in: it is the noisiest source and its anonymous quota is small) |
 | `expertsRepo` | `jnMetaCode/agency-agents-zh@main` | Roster repo for the Experts tab (`owner/repo@ref`) |
 | `enableExperts` | `true` | Turn the Experts tab on or off |
+| `enableExpertPackages` | `true` | Show SkillHub's expert packages (metadata only) in the Experts tab |
 | `sourceTimeoutMs` | `8000` | Per-source budget before it is reported as slow and skipped |
 | `downloadTimeoutMs` | `60000` | Budget for downloading a skill archive |
 | `cacheTtlMs` | `600000` | How long tree listings and detail responses stay warm |

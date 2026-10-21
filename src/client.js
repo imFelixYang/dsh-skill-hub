@@ -77,7 +77,12 @@ window.__ModuleLoader__.load({
         "composer.button": "技能·专家",
         "composer.hint": "技能·专家",
         "composer.browseSkills": "浏览技能",
-        "composer.browseExperts": "浏览专家"
+        "composer.browseExperts": "浏览专家",
+        "apikey.all": "不限 API Key",
+        "apikey.required": "需要 API Key",
+        "apikey.none": "无需 API Key",
+        "experts.packages": "SkillHub 专家包",
+        "experts.packagesHint": "由 SkillHub 官方提供，面向 agentchat / clawpro 等客户端，目前不开放第三方直接安装，仅作展示。"
       },
       en: {
         "panel.title": "SkillAgency",
@@ -126,17 +131,22 @@ window.__ModuleLoader__.load({
         "composer.button": "SkillAgency",
         "composer.hint": "SkillAgency",
         "composer.browseSkills": "Browse skills",
-        "composer.browseExperts": "Browse experts"
+        "composer.browseExperts": "Browse experts",
+        "apikey.all": "Any API key",
+        "apikey.required": "Needs API key",
+        "apikey.none": "No API key",
+        "experts.packages": "SkillHub expert packages",
+        "experts.packagesHint": "Published by SkillHub for the agentchat / clawpro clients. Their contents are not downloadable by third parties, so these are shown for reference only."
       }
     };
 
+    /**
+     * The audience is Chinese, so the interface is Chinese-only by product
+     * decision: no English fallback and the host locale cannot override it.
+     * Kept as a function (rather than a constant) so an English build would only
+     * have to change this one line.
+     */
     function detectLocale() {
-      try {
-        var lang = document.documentElement && document.documentElement.lang;
-        if (lang && /^en(?:-|$)/i.test(lang)) return "en";
-      } catch (e) {
-        /* ignore */
-      }
       return "zh";
     }
 
@@ -144,7 +154,7 @@ window.__ModuleLoader__.load({
 
     function translate(key, params) {
       var table = DICT[activeLocale] || DICT.zh;
-      var text = table[key] || DICT.en[key] || key;
+      var text = table[key] || DICT.zh[key] || key;
       if (params) {
         Object.keys(params).forEach(function (name) {
           text = String(text).replace("{" + name + "}", params[name]);
@@ -165,12 +175,12 @@ window.__ModuleLoader__.load({
         } catch (e) {
           /* registering twice throws; the first registration wins */
         }
-        if (typeof locale.bind === "function") {
-          var bound = locale.bind(NS);
-          if (typeof bound === "function") t = bound;
-        }
+        // Deliberately not adopting `locale.bind(NS)` here: the host reports
+        // the document language (often "en") rather than the language the user
+        // reads, which is what turned this panel English. Our own table is the
+        // authority, so `t` stays on translate().
       } catch (e) {
-        /* no locale service — fall back to the document language */
+        /* no locale service — fall back to the local table */
       }
     }
 
@@ -187,14 +197,13 @@ window.__ModuleLoader__.load({
       ".dsh-sh-title-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}",
       ".dsh-sh-heading{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}",
 
-      ".dsh-sh-tabs{display:inline-flex;gap:2px;padding:2px;margin-left:auto;",
-      "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.05));",
-      "border:1px solid var(--dsw-alias-border-l1,transparent);border-radius:10px}",
+      ".dsh-sh-tabs{display:inline-flex;align-items:center;gap:18px;margin-left:auto}",
       ".dsh-sh-tab{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary,#a0a0a0);",
-      "font:inherit;font-size:13px;padding:4px 12px;border-radius:8px;cursor:pointer;white-space:nowrap}",
+      "font:inherit;font-size:14px;padding:6px 2px;cursor:pointer;white-space:nowrap;position:relative}",
       ".dsh-sh-tab:hover{color:var(--dsw-alias-label-primary,#fff)}",
-      ".dsh-sh-tab[data-active]{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1));",
-      "color:var(--dsw-alias-label-primary,#fff);font-weight:600}",
+      ".dsh-sh-tab[data-active]{color:var(--dsw-alias-label-primary,#fff);font-weight:600}",
+      ".dsh-sh-tab[data-active]:after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;",
+      "border-radius:2px;background:var(--dsw-alias-brand-primary,#6366f1)}",
 
       ".dsh-sh-search-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}",
       ".dsh-sh-search{position:relative;flex:1;min-width:180px;display:flex;align-items:center}",
@@ -218,46 +227,65 @@ window.__ModuleLoader__.load({
       "border-color:var(--dsw-alias-brand-primary,#6366f1);",
       "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
 
-      ".dsh-sh-body{flex:1;display:flex;min-height:0;overflow:hidden}",
+      ".dsh-sh-body{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}",
 
-      ".dsh-sh-cats{width:150px;flex:none;overflow-y:auto;padding:10px 8px;",
-      "border-right:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
-      ".dsh-sh-cat{display:block;width:100%;box-sizing:border-box;appearance:none;border:none;background:transparent;",
-      "font:inherit;font-size:13px;text-align:left;color:var(--dsw-alias-label-secondary,#a0a0a0);",
-      "padding:6px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      // Category / department filters sit in one wrapping row above the grid,
+      // the way the reference marketplace lays them out.
+      ".dsh-sh-cats{width:auto;flex:none;display:flex;flex-wrap:wrap;gap:6px;overflow:visible;",
+      "padding:0 0 10px;border-right:none}",
+      ".dsh-sh-cat{display:inline-block;width:auto;box-sizing:border-box;appearance:none;background:transparent;",
+      "font:inherit;font-size:12px;text-align:center;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "padding:4px 12px;border-radius:999px;cursor:pointer;white-space:nowrap;",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
       ".dsh-sh-cat:hover{color:var(--dsw-alias-label-primary,#fff);",
       "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}",
       ".dsh-sh-cat[data-active]{color:var(--dsw-alias-label-primary,#fff);font-weight:600;",
+      "border-color:var(--dsw-alias-brand-primary,#6366f1);",
       "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
 
       ".dsh-sh-main{flex:1;min-width:0;overflow-y:auto;padding:12px 14px 24px}",
 
-      ".dsh-sh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}",
-      ".dsh-sh-card{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:12px;",
+      ".dsh-sh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}",
+      ".dsh-sh-card{display:flex;flex-direction:column;gap:9px;padding:14px;border-radius:14px;",
       "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.04));",
       "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08));cursor:pointer;",
-      "transition:border-color .12s ease,background .12s ease}",
+      "transition:border-color .12s ease,background .12s ease,transform .12s ease}",
       ".dsh-sh-card:hover{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,.2));",
-      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07))}",
-      ".dsh-sh-card-head{display:flex;align-items:center;gap:8px;min-width:0}",
-      ".dsh-sh-avatar{width:26px;height:26px;flex:none;border-radius:7px;object-fit:cover;",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07));transform:translateY(-1px)}",
+      ".dsh-sh-card-head{display:flex;align-items:flex-start;gap:10px;min-width:0}",
+      ".dsh-sh-card-headtext{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}",
+      ".dsh-sh-card-sub{font-size:11px;color:var(--dsw-alias-label-tertiary,#808080);",
+      "overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".dsh-sh-avatar{width:36px;height:36px;flex:none;border-radius:10px;object-fit:cover;",
       "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.08))}",
-      ".dsh-sh-avatar-fallback{width:26px;height:26px;flex:none;border-radius:7px;display:flex;",
-      "align-items:center;justify-content:center;font-size:12px;font-weight:600;",
+      ".dsh-sh-avatar-fallback{width:36px;height:36px;flex:none;border-radius:10px;display:flex;",
+      "align-items:center;justify-content:center;font-size:15px;font-weight:600;",
       "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.08));",
       "color:var(--dsw-alias-label-secondary,#a0a0a0)}",
-      ".dsh-sh-card-title{font-size:13px;font-weight:600;min-width:0;overflow:hidden;",
-      "text-overflow:ellipsis;white-space:nowrap;flex:1}",
+      ".dsh-sh-card-title{font-size:14px;font-weight:600;min-width:0;overflow:hidden;",
+      "text-overflow:ellipsis;white-space:nowrap}",
       ".dsh-sh-badge{flex:none;font-size:11px;padding:1px 7px;border-radius:999px;",
       "color:var(--dsw-alias-label-secondary,#a0a0a0);",
       "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.07))}",
       ".dsh-sh-badge[data-tone=installed]{color:var(--dsw-alias-state-success-primary,#8ec07c)}",
       ".dsh-sh-badge[data-tone=verified]{color:var(--dsw-alias-brand-primary,#6366f1)}",
-      ".dsh-sh-card-desc{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary,#a0a0a0);",
-      "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.9em}",
-      ".dsh-sh-card-foot{display:flex;align-items:center;gap:8px;font-size:11px;",
-      "color:var(--dsw-alias-label-tertiary,#808080);margin-top:auto}",
+      ".dsh-sh-card-desc{font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:3.1em}",
+      ".dsh-sh-card-tags{display:flex;flex-wrap:wrap;gap:6px;min-height:1.6em}",
+      ".dsh-sh-tag{font-size:11px;padding:2px 8px;border-radius:6px;white-space:nowrap;",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.06))}",
+      ".dsh-sh-tag[data-tone=warn]{color:var(--dsw-alias-state-warning-primary,#d79921)}",
+      ".dsh-sh-card-foot{display:flex;align-items:center;gap:10px;font-size:11px;",
+      "color:var(--dsw-alias-label-tertiary,#808080);margin-top:auto;padding-top:2px}",
       ".dsh-sh-card-actions{display:flex;gap:6px;margin-left:auto}",
+      ".dsh-sh-add{appearance:none;flex:none;width:26px;height:26px;border-radius:8px;cursor:pointer;",
+      "display:inline-flex;align-items:center;justify-content:center;font-size:15px;line-height:1;",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.16));background:transparent;",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0)}",
+      ".dsh-sh-add:hover{color:var(--dsw-alias-label-primary,#fff);",
+      "border-color:var(--dsw-alias-brand-primary,#6366f1)}",
+      ".dsh-sh-add[disabled]{opacity:.5;cursor:default}",
 
       ".dsh-sh-btn{appearance:none;font:inherit;font-size:12px;padding:4px 11px;border-radius:7px;cursor:pointer;",
       "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14));",
@@ -346,6 +374,12 @@ window.__ModuleLoader__.load({
       "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08))}",
       ".dsh-sh-composer-btn.dsh-sh-composer-icon{padding:4px;width:26px;height:26px;",
       "display:inline-flex;align-items:center;justify-content:center;border-radius:7px}",
+      ".dsh-sh-bolt{font-size:15px;line-height:1;display:inline-block}",
+      ".dsh-sh-apikey-row{margin-top:6px}",
+      ".dsh-sh-pkg-logo{width:22px;height:22px;border-radius:5px;object-fit:contain;display:block}",
+      ".dsh-sh-pkg-ver{font-size:11px;flex:none;padding:1px 6px;border-radius:999px;",
+      "color:var(--dsw-alias-label-tertiary,#9a9a9a);",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
       ".dsh-sh-picker{position:absolute;bottom:100%;left:0;margin-bottom:6px;width:280px;max-height:300px;",
       "overflow-y:auto;z-index:30;padding:6px;border-radius:11px;",
       "background:var(--dsw-alias-bg-module-platform,rgba(40,40,40,.98));",
@@ -713,48 +747,58 @@ window.__ModuleLoader__.load({
           "div",
           { className: "dsh-sh-card-head" },
           h(Avatar, { skill: skill }),
-          h("span", { className: "dsh-sh-card-title", title: skill.name }, skill.name || skill.slug),
-          skill.installed ? h("span", { className: "dsh-sh-badge", "data-tone": "installed" }, t("action.installed")) : null
+          h(
+            "div",
+            { className: "dsh-sh-card-headtext" },
+            h("span", { className: "dsh-sh-card-title", title: skill.name }, skill.name || skill.slug),
+            h("span", { className: "dsh-sh-card-sub" }, sourceLabelOf(skill))
+          ),
+          skill.installed
+            ? h("span", { className: "dsh-sh-badge", "data-tone": "installed" }, t("action.installed"))
+            : h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-add",
+                  title: t("action.install"),
+                  "aria-label": t("action.install"),
+                  disabled: busy,
+                  onClick: function (event) {
+                    event.stopPropagation();
+                    onInstall(skill);
+                  }
+                },
+                busy ? "…" : "＋"
+              )
         ),
         h("div", { className: "dsh-sh-card-desc" }, pickSummary(skill) || "—"),
         h(
           "div",
+          { className: "dsh-sh-card-tags" },
+          skill.requiresApiKey === true
+            ? h("span", { className: "dsh-sh-tag", "data-tone": "warn" }, t("apikey.required"))
+            : null
+        ),
+        h(
+          "div",
           { className: "dsh-sh-card-foot" },
-          h("span", null, sourceLabelOf(skill)),
           skill.downloads ? h("span", null, "↓ " + formatCount(skill.downloads)) : null,
-          h(
-            "div",
-            { className: "dsh-sh-card-actions" },
-            skill.installed
-              ? h(
-                  "button",
-                  {
-                    type: "button",
-                    className: "dsh-sh-btn",
-                    "data-variant": "danger",
-                    disabled: busy,
-                    onClick: function (event) {
-                      event.stopPropagation();
-                      onUninstall(skill);
-                    }
-                  },
-                  busy ? t("loading") : t("action.uninstall")
-                )
-              : h(
-                  "button",
-                  {
-                    type: "button",
-                    className: "dsh-sh-btn",
-                    "data-variant": "primary",
-                    disabled: busy,
-                    onClick: function (event) {
-                      event.stopPropagation();
-                      onInstall(skill);
-                    }
-                  },
-                  busy ? t("action.installing") : t("action.install")
-                )
-          )
+          skill.installed
+            ? h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-btn dsh-sh-card-actions",
+                  "data-variant": "danger",
+                  disabled: busy,
+                  onClick: function (event) {
+                    event.stopPropagation();
+                    onUninstall(skill);
+                  }
+                },
+                busy ? t("loading") : t("action.uninstall")
+              )
+            : null
         )
       );
     }
@@ -879,6 +923,11 @@ window.__ModuleLoader__.load({
       var sourceState = useState("");
       var activeSource = sourceState[0];
       var setActiveSource = sourceState[1];
+
+      // "" = no preference, "required" = declares an API key, "none" = does not.
+      var apiKeyState = useState("");
+      var activeApiKey = apiKeyState[0];
+      var setActiveApiKey = apiKeyState[1];
 
       var categoryState = useState("");
       var activeCategory = categoryState[0];
@@ -1011,7 +1060,8 @@ window.__ModuleLoader__.load({
             page: nextPage,
             pageSize: 30,
             source: activeSource || undefined,
-            category: activeCategory || undefined
+            category: activeCategory || undefined,
+            apiKey: activeApiKey || undefined
           };
 
           return api
@@ -1046,7 +1096,7 @@ window.__ModuleLoader__.load({
               if (requestRef.current === token) setLoading(false);
             });
         },
-        [api, keyword, activeSource, activeCategory]
+        [api, keyword, activeSource, activeCategory, activeApiKey]
       );
 
       // Debounce typing; switch a filter and the search fires immediately.
@@ -1060,7 +1110,7 @@ window.__ModuleLoader__.load({
             clearTimeout(timer);
           };
         },
-        [tab, keyword, activeSource, activeCategory, runSearch]
+        [tab, keyword, activeSource, activeCategory, activeApiKey, runSearch]
       );
 
       // The installed list is only fetched when its tab is actually opened.
@@ -1413,6 +1463,11 @@ window.__ModuleLoader__.load({
         });
       }
 
+      // SkillHub's own expert bundles are listed for discovery only: their
+      // content routes are closed to third-party clients, so there is no install
+      // button for them.
+      var expertPackages = (roster && roster.packages) || [];
+
       var renderExpertRow = function (expert) {
         var installing = isBusy(expert, "install");
         return h(
@@ -1504,7 +1559,40 @@ window.__ModuleLoader__.load({
               group.label ? h("div", { className: "dsh-sh-group-title" }, group.label) : null,
               group.experts.map(renderExpertRow)
             );
-          })
+          }),
+          expertPackages.length
+            ? h(
+                "div",
+                { key: "skillhub-packages" },
+                h("div", { className: "dsh-sh-group-title" }, t("experts.packages")),
+                expertPackages.map(function (pkg) {
+                  return h(
+                    "div",
+                    { className: "dsh-sh-row", key: "pkg-" + pkg.packageId },
+                    h(
+                      "span",
+                      { className: "dsh-sh-expert-emoji", "aria-hidden": "true" },
+                      pkg.logoUrl
+                        ? h("img", {
+                            className: "dsh-sh-pkg-logo",
+                            src: pkg.logoUrl,
+                            alt: "",
+                            loading: "lazy"
+                          })
+                        : "📦"
+                    ),
+                    h(
+                      "div",
+                      { className: "dsh-sh-row-body" },
+                      h("div", { className: "dsh-sh-row-title" }, pkg.name),
+                      h("div", { className: "dsh-sh-row-desc" }, pkg.summary || pkg.packageId)
+                    ),
+                    pkg.version ? h("span", { className: "dsh-sh-pkg-ver" }, pkg.version) : null
+                  );
+                }),
+                h("div", { className: "dsh-sh-expert-note" }, t("experts.packagesHint"))
+              )
+            : null
         );
       }
 
@@ -1664,6 +1752,30 @@ window.__ModuleLoader__.load({
                         }
                       },
                       source.label || source.id
+                    );
+                  })
+                ),
+                h(
+                  "div",
+                  { className: "dsh-sh-sources dsh-sh-apikey-row" },
+                  [
+                    ["", t("apikey.all")],
+                    ["required", t("apikey.required")],
+                    ["none", t("apikey.none")]
+                  ].map(function (pair) {
+                    return h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "dsh-sh-chip",
+                        key: "apikey-" + pair[0],
+                        "data-active": activeApiKey === pair[0] ? "" : undefined,
+                        onClick: function () {
+                          setActiveApiKey(pair[0]);
+                          setDetail(null);
+                        }
+                      },
+                      pair[1]
                     );
                   })
                 )
@@ -1908,7 +2020,7 @@ window.__ModuleLoader__.load({
               setOpen(!open);
             }
           },
-          h(SkillHubIcon, { size: 14 })
+          h("span", { className: "dsh-sh-bolt", "aria-hidden": "true" }, "⚡️")
         ),
         open
           ? h(

@@ -72,7 +72,7 @@ try {
   const sources = await call("sources", {});
   check("sources succeeds", sources.result.ok === true, JSON.stringify(sources.result.error));
   const sourceIds = sources.result.ok ? sources.result.value.sources.map((s) => s.id) : [];
-  check("three catalogues registered", sourceIds.length === 3, sourceIds.join(","));
+  check("the shipping pair is registered", sourceIds.length === 2, sourceIds.join(","));
 
   // ── categories ─────────────────────────────────────────────────────────
   const categories = await call("categories", {});
@@ -110,7 +110,16 @@ try {
     const value = all.result.value;
     const bySource = {};
     for (const item of value.items) bySource[item.source] = (bySource[item.source] || 0) + 1;
-    check("search[all] merges several sources", Object.keys(bySource).length > 1, JSON.stringify(bySource));
+    // SkillHub mirrors ClawHub, so an all-sources page may legitimately come
+    // back single-sourced once duplicates collapse. Same-slug entries with
+    // different names are genuinely different skills (one slug, many authors),
+    // so only an exact repeat counts as a duplicate.
+    const keys = value.items.map((item) => `${item.source}|${item.slug}|${item.name}`);
+    check(
+      "search[all] returns unique entries",
+      value.items.length > 0 && new Set(keys).size === keys.length,
+      JSON.stringify(bySource)
+    );
     check(
       "search[all] finishes near the slowest source",
       all.ms < 9000,

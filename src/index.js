@@ -42,6 +42,15 @@ export const inject = ['connection', 'skills']
 // ── defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_SKILLHUB_API = 'https://api.skillhub.tencent.com'
+
+/**
+ * SkillHub answers from more than one host and the payloads are byte-identical,
+ * so they are treated as mirrors rather than separate sources: whichever host
+ * replies first is used, and a host that refuses, times out or errors is simply
+ * skipped in favour of the next one. The Tencent host leads because it measured
+ * about twice as fast as the `.cn` host from mainland China.
+ */
+const DEFAULT_SKILLHUB_MIRRORS = ['https://api.skillhub.tencent.com', 'https://api.skillhub.cn']
 const DEFAULT_CLAWHUB_API = 'https://clawhub.ai'
 const DEFAULT_JSDELIVR_DATA = 'https://data.jsdelivr.com'
 const DEFAULT_JSDELIVR_CDN = 'https://cdn.jsdelivr.net'
@@ -77,23 +86,31 @@ const MAX_README_CHARS = 400 * 1024
 
 /** Chinese labels for the SkillHub category keys. The API only ships English. */
 const CATEGORY_ZH = {
-  'pay-skill': '付费技能',
+  // "Pay Skill" is the upstream product name, not a "paid" tier — the site
+  // lists it verbatim, so translating it to 付费技能 read like a paywall.
+  'pay-skill': 'Pay Skill',
   'office-efficiency': '办公效率',
   'content-creation': '内容创作',
   'dev-programming': '开发编程',
   'data-analysis': '数据分析',
   'design-media': '设计多媒体',
-  'ai-agent': 'AI 智能体',
+  'ai-agent': 'AI Agent',
   'knowledge-management': '知识管理',
   'business-ops': '商业运营',
   'education': '教育学习',
   'professional': '行业专业',
-  'it-ops-security': '运维安全',
+  'it-ops-security': 'IT 运维与安全',
   'life-service': '生活服务'
 }
 
-/** Error codes the RPC layer accepts; anything else is reported as `internal`. */
-const ERROR_CODES = new Set([
+/**
+ * Category keys that are not offered as a scenario filter. "pay-skill" is a
+ * payment product line rather than a use case, so it stays in the catalogue but
+ * not in the sidebar; the API-key dimension covers what it used to imply.
+ */
+const HIDDEN_CATEGORY_KEYS = new Set(['pay-skill'])
+
+/** Error codes the RPC layer accepts; anything else is reported as `internal`. */const ERROR_CODES = new Set([
   'bad-request',
   'cancelled',
   'internal',
@@ -513,6 +530,7 @@ function normalizeCategories(rawItems) {
   for (const item of Array.isArray(rawItems) ? rawItems : []) {
     const key = typeof item === 'string' ? item : item && item.key
     if (!key) continue
+    if (HIDDEN_CATEGORY_KEYS.has(key)) continue
     const english = (item && (item.nameEn || item.name)) || key
     list.push({
       key,
@@ -544,12 +562,14 @@ async function loadCategories(config, signal) {
     // fall through to the built-in catalogue so the filter is never empty
   }
 
-  const fallback = Object.keys(CATEGORY_ZH).map((key, index) => ({
-    key,
-    name: CATEGORY_ZH[key],
-    nameEn: key,
-    sortOrder: index
-  }))
+  const fallback = Object.keys(CATEGORY_ZH)
+    .filter((key) => !HIDDEN_CATEGORY_KEYS.has(key))
+    .map((key, index) => ({
+      key,
+      name: CATEGORY_ZH[key],
+      nameEn: key,
+      sortOrder: index
+    }))
   return fallback
 }
 
@@ -604,6 +624,13 @@ const skillhub = {
       // happen to reuse the same slug as two separate skills.
       upstreamUrl: row.upstream_url || '',
       namespaceKey: (row.namespace && row.namespace.canonicalName) || '',
+      // The registry publishes `labels.requires_api_key` per row. It is the only
+      // machine-readable "needs credentials" signal, so it drives the API-key
+      // filter. Absent labels mean "not declared", not "no key needed".
+      requiresApiKey:
+        row.labels && typeof row.labels.requires_api_key === 'boolean'
+          ? row.labels.requires_api_key
+          : null,
       installed: installName.has(String(row.slug).toLowerCase())
     }))
 
@@ -876,6 +903,24 @@ function parseRepoList(value) {
     .map((piece) => parseRepoRef(piece))
     .filter(Boolean)
   return list.length ? list : String(DEFAULT_GITHUB_REPOS).split(',').map(parseRepoRef).filter(Boolean)
+}
+
+/**
+ * Mirror hosts, in the order they should be tried. Accepts a list or a
+ * comma/space separated string. The older single-host `skillhubApiBase` setting
+ * still works: when it is set it becomes the only mirror, so an existing
+ * configuration keeps pointing where its owner put it.
+ */
+function parseMirrorList(value, legacyBase) {
+  const raw = Array.isArray(value) ? value.join(',') : typeof value === 'string' ? value : ''
+  const list = raw
+    .split(/[\s,]+/)
+    .map((piece) => trimSlash(piece.trim()))
+    .filter((piece) => /^https?:\/\//i.test(piece))
+  if (list.length) return list
+  const legacy = trimSlash(legacyBase || '')
+  if (legacy) return [legacy]
+  return DEFAULT_SKILLHUB_MIRRORS.slice()
 }
 
 /** jsDelivr's own file listing. Fast and quota-free, but it refuses some repos. */
@@ -1335,6 +1380,7 @@ function parseExpertRoster(text) {
 }
 
 let expertCache = { key: '', at: 0, value: null }
+let expertPackageCache = { at: 0, list: [] }
 
 async function loadExpertCatalog(config, signal) {
   const repoSpec = parseRepoRef(config.expertsRepo)
@@ -1367,6 +1413,41 @@ async function loadExpertCatalog(config, signal) {
   }
   expertCache = { key, at: Date.now(), value }
   return value
+}
+
+/**
+ * SkillHub's own "expert packages" (skillhub.cn/skillspackage). Only the list
+ * and its version history are public: every content/download route answers 405
+ * because these bundles target other clients (agentchat, clawpro). They are
+ * therefore shown read-only instead of pretending they can be installed.
+ */
+async function loadExpertPackages(config, signal) {
+  if (config.enableExpertPackages === false) return []
+  const fresh = Date.now() - expertPackageCache.at < config.cacheTtlMs
+  if (fresh && expertPackageCache.list.length) return expertPackageCache.list
+
+  try {
+    const payload = await getJson(joinUrl(config.skillhubApiBase, '/api/v1/expert-packages'), {
+      timeoutMs: config.sourceTimeoutMs,
+      signal
+    })
+    const rows = Array.isArray(payload.packages) ? payload.packages : []
+    const list = rows
+      .filter((row) => row && row.packageId)
+      .map((row) => ({
+        packageId: row.packageId,
+        name: row.name || row.packageId,
+        summary: row.description || '',
+        logoUrl: row.logoUrl || '',
+        version: row.latestVersion || '',
+        publishedAt: Number(row.publishedAt || 0)
+      }))
+    expertPackageCache = { at: Date.now(), list }
+    return list
+  } catch {
+    // A missing package list must not take the roster down with it.
+    return expertPackageCache.list || []
+  }
 }
 
 function yamlScalar(value) {
@@ -1566,6 +1647,64 @@ function fuzzyIdentity(item) {
   return slug + '|' + name
 }
 
+// ── SkillHub mirror rotation ────────────────────────────────────────────────
+
+/** Index of the mirror that answered last, so it is tried first next time. */
+let mirrorCursor = 0
+
+/**
+ * Run `attempt` against the mirrors in turn until one answers.
+ *
+ * Not every failure means the same thing:
+ *  - the caller cancelled (`AbortError`) — stop, the request is over;
+ *  - the host timed out, refused the connection or failed TLS — try the next;
+ *  - the host answered with a 5xx — try the next;
+ *  - the host answered with a 4xx — it is alive and its answer is authoritative,
+ *    so do not ask the others (a missing skill is missing on every mirror).
+ *
+ * The mirror that answered is remembered, so a working host is not re-probed on
+ * every single request.
+ */
+async function withSkillHubMirror(config, attempt) {
+  const mirrors = Array.isArray(config.skillhubMirrors) && config.skillhubMirrors.length
+    ? config.skillhubMirrors
+    : DEFAULT_SKILLHUB_MIRRORS
+
+  if (mirrors.length === 1) return attempt(mirrors[0])
+
+  const start = mirrorCursor % mirrors.length
+  let lastError
+  for (let offset = 0; offset < mirrors.length; offset += 1) {
+    const index = (start + offset) % mirrors.length
+    try {
+      const value = await attempt(mirrors[index])
+      mirrorCursor = index
+      return value
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw error
+      const status = /^HTTP (\d{3})\b/.exec(String((error && error.message) || ''))
+      if (status && Number(status[1]) >= 400 && Number(status[1]) < 500) throw error
+      lastError = error
+    }
+  }
+  throw lastError
+}
+
+/**
+ * Route every SkillHub call through the rotation. The adapter is written against
+ * a single base URL, so the retry loop is applied once here instead of being
+ * repeated inside all four methods.
+ */
+for (const method of ['search', 'detail', 'readme', 'install']) {
+  const original = skillhub[method]
+  if (typeof original !== 'function') continue
+  skillhub[method] = function onMirror(config, ...rest) {
+    return withSkillHubMirror(config, (base) =>
+      original.call(skillhub, { ...config, skillhubApiBase: base }, ...rest)
+    )
+  }
+}
+
 function resolveSourceList(config) {
   const list = []
   if (config.enableSkillHub) list.push('skillhub')
@@ -1583,6 +1722,12 @@ async function searchAcross(config, args, signal) {
   const page = toPositiveInt(args.page, 1, 200)
   const pageSize = toPositiveInt(args.pageSize, 30, 60)
 
+  // "requires an API key" is published per row but is not a query parameter the
+  // registry honours, so it has to be applied after fetching. Asking for a wider
+  // slice keeps a filtered page from coming back mostly empty.
+  const apiKeyFilter = args.apiKey === 'required' || args.apiKey === 'none' ? args.apiKey : ''
+  const fetchSize = apiKeyFilter ? Math.min(pageSize * 3, 100) : pageSize
+
   const outcomes = await Promise.all(
     requested.map(async (sourceId) => {
       const adapter = SOURCES[sourceId]
@@ -1595,7 +1740,7 @@ async function searchAcross(config, args, signal) {
         return { sourceId, items: [], skipped: 'no-category' }
       }
       try {
-        const result = await adapter.search(config, { ...args, page, pageSize }, signal)
+        const result = await adapter.search(config, { ...args, page, pageSize: fetchSize }, signal)
         return { sourceId, items: result.items || [], total: result.total, hasMore: result.hasMore }
       } catch (error) {
         if (isAbort(error) && signal && signal.aborted) throw error
@@ -1669,11 +1814,33 @@ async function searchAcross(config, args, signal) {
     return String(a.name || '').localeCompare(String(b.name || ''))
   })
 
+  // One row per visible name. SkillHub really does carry the same title under
+  // several publishers, and some rows keep a trailing ".Skill" in the name, so
+  // the grid showed what looked like the same card four times. The list is
+  // ordered by downloads above, so the first row for a name is the most
+  // popular one and the rest are the same skill republished.
+  const seenNames = new Set()
+  const unique = []
+  for (const item of merged) {
+    const key = foldText(item.name) || foldText(item.slug)
+    if (key && seenNames.has(key)) continue
+    if (key) seenNames.add(key)
+    unique.push(item)
+  }
+
   const totalKnown = outcomes.reduce((sum, outcome) => sum + (outcome.total || 0), 0)
   const hasMore = outcomes.some((outcome) => outcome.hasMore)
 
+  // `required` keeps only rows that declare they need a key; `none` keeps every
+  // row that does not declare one, because silence is not a requirement.
+  const filtered = apiKeyFilter
+    ? unique.filter((item) =>
+        apiKeyFilter === 'required' ? item.requiresApiKey === true : item.requiresApiKey !== true
+      )
+    : unique
+
   return {
-    items: merged,
+    items: filtered.slice(0, pageSize),
     total: totalKnown || merged.length,
     page,
     pageSize,
@@ -1968,14 +2135,21 @@ function resolveConfig(config = {}) {
     githubToken: typeof config.githubToken === 'string' ? config.githubToken : '',
     localSkillsDir: config.localSkillsDir || '',
     enableSkillHub: config.enableSkillHub !== false,
+    // Two channels, matching the catalogue they mirror: SkillHub (Chinese
+    // metadata, and it already mirrors most of ClawHub) plus ClawHub itself.
+    // GitHub repos stay supported but off by default — their metadata is
+    // English-only and duplicated what the other two carry, so the grid read
+    // as noise. Turn them on with `enableGitHub` in the patch.
     enableClawHub: config.enableClawHub !== false,
-    enableGitHub: config.enableGitHub !== false,
+    enableGitHub: config.enableGitHub === true,
+    skillhubMirrors: parseMirrorList(config.skillhubMirrors, config.skillhubApiBase),
     githubRepos: parseRepoList(config.githubRepos || DEFAULT_GITHUB_REPOS),
     expertsRepo:
       typeof config.expertsRepo === 'string' && config.expertsRepo.trim()
         ? config.expertsRepo.trim()
         : DEFAULT_EXPERTS_REPO,
     enableExperts: config.enableExperts !== false,
+    enableExpertPackages: config.enableExpertPackages !== false,
     sourceTimeoutMs: toPositiveInt(config.sourceTimeoutMs, 8000, 60000),
     downloadTimeoutMs: toPositiveInt(config.downloadTimeoutMs, 60000, 300000),
     cacheTtlMs: toPositiveInt(config.cacheTtlMs, 600000, 86400000)
@@ -2005,12 +2179,16 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
 
     case 'experts': {
       if (!resolved.enableExperts) return ok({ repo: '', ref: '', departments: [], experts: [], total: 0 })
-      const catalog = await loadExpertCatalog(resolved, signal)
+      const [catalog, packages] = await Promise.all([
+        loadExpertCatalog(resolved, signal),
+        loadExpertPackages(resolved, signal)
+      ])
       const installed = new Set(
         listLocalSkills(resolveSkillsDir(resolved)).map((item) => item.slug.toLowerCase())
       )
       return ok({
         ...catalog,
+        packages,
         experts: catalog.experts.map((expert) => ({
           ...expert,
           installed: installed.has(expert.stem.toLowerCase())

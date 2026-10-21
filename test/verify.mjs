@@ -218,6 +218,22 @@ const callRoute = async (name, payload) => {
   return res.json();
 };
 
+// GitHub is off by default now (SkillHub + ClawHub is the shipping pair), so the
+// tests that exercise it register a second host with the switch turned on. Each
+// apply writes into whatever route list its ctx carries, so this stays isolated.
+const routesGithub = [];
+host.apply(
+  { connection: { fetch: { register: (spec) => routesGithub.push(spec) } }, skills: {} },
+  { localSkillsDir: scratchSkills, enableGitHub: true }
+);
+const routeOfGithub = (name) => routesGithub.find((r) => r.path === `/api/skill-hub/${name}`);
+const callRouteGithub = async (name, payload) => {
+  const res = await routeOfGithub(name).fetch(
+    new Request("http://x", { method: "POST", body: JSON.stringify({ rpcId: "t", payload: { args: payload } }) })
+  );
+  return res.json();
+};
+
 const searchRoute = routeOf("search");
 const getResponse = await searchRoute.fetch(new Request("http://x/api/skill-hub/search", { method: "GET" }));
 check("GET rejected with 404", getResponse.status === 404, String(getResponse.status));
@@ -238,11 +254,16 @@ const categoriesOut = await callRoute("categories", {});
 check("categories route still succeeds offline", categoriesOut.result?.ok === true);
 const categoryList = categoriesOut.result?.value?.categories || [];
 check("categories include an 'all' head", categoryList[0]?.key === "" && categoryList[0]?.name === "全部");
-check("categories fall back to 13 built-ins", categoryList.length === 14, String(categoryList.length));
+check("categories fall back to 12 built-ins plus the all-head", categoryList.length === 13, String(categoryList.length));
 check(
   "built-in categories are Chinese",
   categoryList.some((entry) => entry.key === "dev-programming" && entry.name === "开发编程"),
   JSON.stringify(categoryList.slice(1, 3))
+);
+check(
+  "the payment product line is not offered as a scenario category",
+  !categoryList.some((entry) => entry.key === "pay-skill"),
+  JSON.stringify(categoryList.map((entry) => entry.key))
 );
 
 // ── 6. A degraded source must not fail the search ────────────────────
@@ -300,7 +321,7 @@ globalThis.fetch = async (url) => {
   throw new Error(`unexpected fetch: ${target}`);
 };
 
-const searchOut = await callRoute("search", { keyword: "", pageSize: 30 });
+const searchOut = await callRouteGithub("search", { keyword: "", pageSize: 30 });
 check("search resolves even with a dead source", searchOut.result?.ok === true, JSON.stringify(searchOut.result?.error));
 
 const searchValue = searchOut.result?.value || {};
@@ -322,7 +343,9 @@ check(
 );
 
 const sourcesOut = await callRoute("sources", {});
-check("sources route lists three catalogues", (sourcesOut.result?.value?.sources || []).length === 3);
+check("sources route lists the two shipping catalogues", (sourcesOut.result?.value?.sources || []).length === 2, JSON.stringify((sourcesOut.result?.value?.sources || []).map((entry) => entry.id)));
+const sourcesGithubOut = await callRouteGithub("sources", {});
+check("enabling GitHub adds a third catalogue", (sourcesGithubOut.result?.value?.sources || []).length === 3);
 check(
   "SkillHub is the only category-aware source",
   (sourcesOut.result?.value?.sources || []).filter((entry) => entry.supportsCategory).map((entry) => entry.id).join(",") ===
@@ -395,7 +418,7 @@ globalThis.fetch = async (url) => {
   throw new Error(`unexpected fetch: ${target}`);
 };
 
-const dedupeOut = await callRoute("search", { keyword: "", pageSize: 30 });
+const dedupeOut = await callRouteGithub("search", { keyword: "", pageSize: 30 });
 const dedupeItems = dedupeOut.result?.value?.items || [];
 const bySlug = (slug) => dedupeItems.filter((item) => item.slug === slug);
 
@@ -572,7 +595,7 @@ const expertSourcesOut = await callRoute("sources", {});
 const sourceIds = (expertSourcesOut.result?.value?.sources || []).map((entry) => entry.id);
 check(
   "experts stay out of keyword search sources",
-  sourceIds.length === 3 && !sourceIds.includes("experts"),
+  sourceIds.length === 2 && !sourceIds.includes("experts"),
   JSON.stringify(sourceIds)
 );
 

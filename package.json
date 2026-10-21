@@ -1,7 +1,7 @@
 {
   "name": "dsh-skill-hub",
   "version": "0.1.0",
-  "description": "SkillAgency (技能·专家) for DeepSeek Harness: search SkillHub + ClawHub + GitHub skill repos, browse an expert roster, preview README, install/uninstall into $DSH_HOME/skills. Registers as an official sidebar panel.",
+  "description": "SkillAgency (技能·专家) for DeepSeek Harness: search SkillHub + ClawHub, browse a 328-persona expert roster, preview README, install/uninstall into $DSH_HOME/skills. Registers as an official sidebar panel.",
   "type": "module",
   "main": "src/index.js",
   "private": true,

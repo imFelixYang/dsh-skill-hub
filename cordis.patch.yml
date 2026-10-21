@@ -1,22 +1,30 @@
 # dsh-skill-hub bundle patch.
 #
 # Host half: registers exact /api/skill-hub/* fetch routes (sources, categories,
-# search, detail, installed, install, uninstall, readme). Client half: claims the
-# official `sidebar.panellist` + `main` seats, so the skill centre is a
-# first-class panel rather than an overlay.
+# search, detail, installed, install, uninstall, readme, experts). Client half:
+# claims the official `sidebar.panellist` + `main` seats, so the skill centre is
+# a first-class panel rather than an overlay.
 #
-# Search runs across three kinds of source, queried in parallel:
-#   skillhub  api.skillhub.tencent.com  (fast in mainland China)
+# Two catalogues ship on by default and are queried in parallel:
+#   skillhub  api.skillhub.tencent.com  (fast in mainland China; mirrors ClawHub)
 #   clawhub   clawhub.ai                (the OpenClaw registry)
-#   github    any repo laid out as <dir>/SKILL.md
+#
+# The GitHub source is still implemented but off by default: it is the noisiest
+# of the three and its anonymous quota is only 60 requests/hour. Set
+# enableGitHub: true to bring it back.
 #
 # A fourth catalogue, the expert roster, is browsed rather than searched: it is
-# served whole by /api/skill-hub/experts and stays out of keyword search.
+# served whole by /api/skill-hub/experts and stays out of keyword search. The
+# same route also reports SkillHub's expert packages (metadata only — that
+# upstream publishes no downloadable archive).
 - insert:
     - id: dsh-skill-hub
       name: 'dsh-skill-hub'
       config:
         skillhubApiBase: https://api.skillhub.tencent.com
+        skillhubMirrors:
+          - https://api.skillhub.tencent.com
+          - https://api.skillhub.cn
         clawhubApiBase: https://clawhub.ai
         githubRepos: >-
           anthropics/skills@main,
@@ -27,5 +35,6 @@
         localSkillsDir: ''
         enableSkillHub: true
         enableClawHub: true
-        enableGitHub: true
+        enableGitHub: false
         enableExperts: true
+        enableExpertPackages: true

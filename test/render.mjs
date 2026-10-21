@@ -117,7 +117,7 @@ check(
 )
 check(
   'the sidebar label resolves to Chinese text',
-  sidebarRow && sidebarRow.options.label() === '技能中心',
+  sidebarRow && sidebarRow.options.label() === '技能·专家',
   sidebarRow && sidebarRow.options.label()
 )
 
@@ -161,7 +161,7 @@ const fresh = collect(first)
 
 check('a fresh mount renders without throwing', !!first)
 check('no element is created without a type', fresh.untyped.length === 0, String(fresh.untyped.length))
-check('the tab strip offers the market tab', fresh.texts.includes('技能市场'))
+check('the tab strip offers the market tab', fresh.texts.includes('技能'))
 check('the tab strip offers the experts tab', fresh.texts.includes('专家'))
 check('the tab strip offers the installed tab', fresh.texts.includes('已安装'))
 
