@@ -9,6 +9,9 @@
 #   skillhub  api.skillhub.tencent.com  (fast in mainland China)
 #   clawhub   clawhub.ai                (the OpenClaw registry)
 #   github    any repo laid out as <dir>/SKILL.md
+#
+# A fourth catalogue, the expert roster, is browsed rather than searched: it is
+# served whole by /api/skill-hub/experts and stays out of keyword search.
 - insert:
     - id: dsh-skill-hub
       name: 'dsh-skill-hub'
@@ -20,7 +23,9 @@
           obra/superpowers@main,
           rohitg00/awesome-claude-code-toolkit@main,
           ComposioHQ/awesome-claude-skills@master
+        expertsRepo: jnMetaCode/agency-agents-zh@main
         localSkillsDir: ''
         enableSkillHub: true
         enableClawHub: true
         enableGitHub: true
+        enableExperts: true

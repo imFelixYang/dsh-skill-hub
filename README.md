@@ -2,7 +2,8 @@
 
 A skill hub for **DeepSeek Harness**: search several public skill registries in
 one place, read a skill's README before installing it, and install / uninstall
-it into `$DSH_HOME/skills`.
+it into `$DSH_HOME/skills`. A second tab adds an **expert roster** — 300+
+role personas that install the same way and are picked from the same panel.
 
 It ships as a first-class DSH panel — the sidebar row, the centre-column page and
 the composer picker are all contributed through the shell's own slot contracts,
@@ -36,6 +37,13 @@ by DSH and follow whichever theme is active.
   directory, so skills installed by other means still show up.
 - **Composer picker** — a small button next to the chat input inserts
   `/skill-name` for any installed skill.
+- **Expert roster** — a second tab lists 328 role personas grouped into 22
+  departments, taken from [`jnMetaCode/agency-agents-zh`](https://github.com/jnMetaCode/agency-agents-zh)
+  by default and configurable via `expertsRepo`. Each persona is a single
+  Markdown file; installing one rewrites it into a valid `SKILL.md` (front
+  matter with a lowercase-hyphen `name`, the Chinese role name folded into
+  `description`) so DSH loads it like any other skill. The roster is browsed,
+  not searched: it stays out of the keyword search and has its own filter.
 
 ## Design notes
 
@@ -54,6 +62,12 @@ A few properties this plugin holds itself to:
 - **Path-safe installs.** Archive entry names are normalised and rejected if
   they escape the target directory; slugs are validated before they reach the
   filesystem.
+- **Routes are chosen by measurement.** The expert roster is read through the
+  GitHub contents API first, then `raw.githubusercontent.com`, then jsDelivr.
+  That order looks backwards, but on a mainland connection the two plain-text
+  hosts answered in 17–20 seconds (or timed out) while the API answered in
+  under a second. The roster is two small documents, so the quota cost is
+  bounded and `githubToken` lifts it when needed.
 
 ## Install
 
@@ -92,6 +106,8 @@ the DSH plugin settings:
 | `enableSkillHub` | `true` | Turn the SkillHub source on or off |
 | `enableClawHub` | `true` | Turn the ClawHub source on or off |
 | `enableGitHub` | `true` | Turn the GitHub source on or off |
+| `expertsRepo` | `jnMetaCode/agency-agents-zh@main` | Roster repo for the Experts tab (`owner/repo@ref`) |
+| `enableExperts` | `true` | Turn the Experts tab on or off |
 | `sourceTimeoutMs` | `8000` | Per-source budget before it is reported as slow and skipped |
 | `downloadTimeoutMs` | `60000` | Budget for downloading a skill archive |
 | `cacheTtlMs` | `600000` | How long tree listings and detail responses stay warm |
@@ -111,6 +127,7 @@ blanket `/api` interceptor, so the official API gateway keeps working):
 | `skill-hub/uninstall` | remove an installed skill |
 | `skill-hub/readme` | read a local `README.md` / `SKILL.md` |
 | `skill-hub/categories` | category list, in Chinese |
+| `skill-hub/experts` | the expert roster, grouped by department |
 
 ## Layout
 
@@ -121,6 +138,10 @@ dsh-skill-hub/
 ├── src/
 │   ├── index.js          # host half: RPC routes, HTTP clients, ZIP reader
 │   └── client.js         # browser half: sidebar row, panel page, picker
+├── test/
+│   ├── verify.mjs        # offline: routes, parsing, path safety, de-duplication
+│   ├── render.mjs        # offline: renders the browser half against a React stub
+│   └── live.mjs          # online: real search → detail → install → uninstall
 └── LICENSE               # MIT
 ```
 

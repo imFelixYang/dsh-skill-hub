@@ -33,7 +33,15 @@ window.__ModuleLoader__.load({
       zh: {
         "panel.title": "技能中心",
         "tab.market": "技能市场",
+        "tab.experts": "专家",
         "tab.installed": "已安装",
+        "experts.placeholder": "搜索专家…",
+        "experts.dept.all": "全部部门",
+        "experts.count": "{n} 位专家",
+        "experts.empty": "专家名单暂时不可用",
+        "experts.noMatch": "没有匹配的专家",
+        "experts.hint": "选一位专家，安装后即可在对话中调用它的人格与专长",
+        "experts.installed": "已加入",
         "search.placeholder": "搜索技能…",
         "search.clear": "清除",
         "source.all": "全部来源",
@@ -72,7 +80,15 @@ window.__ModuleLoader__.load({
       en: {
         "panel.title": "Skills",
         "tab.market": "Market",
+        "tab.experts": "Experts",
         "tab.installed": "Installed",
+        "experts.placeholder": "Search experts…",
+        "experts.dept.all": "All departments",
+        "experts.count": "{n} experts",
+        "experts.empty": "The roster is unavailable right now",
+        "experts.noMatch": "No matching experts",
+        "experts.hint": "Pick an expert and install it to bring its persona and craft into the chat",
+        "experts.installed": "Added",
         "search.placeholder": "Search skills…",
         "search.clear": "Clear",
         "source.all": "All sources",
@@ -258,6 +274,13 @@ window.__ModuleLoader__.load({
       ".dsh-sh-row-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".dsh-sh-row-desc{font-size:12px;color:var(--dsw-alias-label-secondary,#a0a0a0);",
       "overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".dsh-sh-row[data-clickable]{cursor:pointer}",
+      ".dsh-sh-row[data-clickable]:hover{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,.2))}",
+      ".dsh-sh-expert-emoji{flex:none;width:26px;text-align:center;font-size:17px;line-height:1}",
+      ".dsh-sh-group-title{font-size:12px;font-weight:600;letter-spacing:.4px;margin:16px 0 2px;",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0)}",
+      ".dsh-sh-group-title:first-child{margin-top:0}",
+      ".dsh-sh-expert-note{font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary,#a0a0a0)}",
 
       ".dsh-sh-detail{display:flex;flex-direction:column;gap:14px;max-width:860px}",
       ".dsh-sh-detail-head{display:flex;align-items:flex-start;gap:10px}",
@@ -561,6 +584,9 @@ window.__ModuleLoader__.load({
         categories: function (signal) {
           return call("categories", {}, signal);
         },
+        experts: function (signal) {
+          return call("experts", {}, signal);
+        },
         search: function (args, signal) {
           return call("search", args, signal);
         },
@@ -844,6 +870,25 @@ window.__ModuleLoader__.load({
       var categories = categoriesState[0];
       var setCategories = categoriesState[1];
 
+      // The roster is a separate catalogue served by its own endpoint, so it
+      // keeps its own slice of state instead of being folded into the search
+      // list (which is paged and filtered by source/category).
+      var rosterState = useState(null);
+      var roster = rosterState[0];
+      var setRoster = rosterState[1];
+
+      var deptState = useState("");
+      var activeDept = deptState[0];
+      var setActiveDept = deptState[1];
+
+      var rosterErrorState = useState("");
+      var rosterError = rosterErrorState[0];
+      var setRosterError = rosterErrorState[1];
+
+      var expertQueryState = useState("");
+      var expertQuery = expertQueryState[0];
+      var setExpertQuery = expertQueryState[1];
+
       var itemsState = useState([]);
       var items = itemsState[0];
       var setItems = itemsState[1];
@@ -1025,6 +1070,33 @@ window.__ModuleLoader__.load({
         [tab, loadInstalled]
       );
 
+      // The roster is fetched once and kept: it is a fixed curated list, and
+      // re-fetching it on every tab switch would spend API quota for nothing.
+      var loadRoster = useCallback(
+        function (force) {
+          if (roster && !force) return undefined;
+          setRosterError("");
+          return api
+            .experts()
+            .then(function (value) {
+              setRoster(value || { departments: [], experts: [], total: 0 });
+            })
+            .catch(function (failure) {
+              setRosterError((failure && failure.message) || t("error.generic"));
+              setRoster({ departments: [], experts: [], total: 0 });
+            });
+        },
+        [api, roster]
+      );
+
+      useEffect(
+        function () {
+          if (tab !== "experts") return;
+          loadRoster(false);
+        },
+        [tab, loadRoster]
+      );
+
       var markBusy = function (key, value) {
         setBusy(function (previous) {
           var next = {};
@@ -1053,6 +1125,17 @@ window.__ModuleLoader__.load({
                 return previous && previous.id === skill.id ? { ...previous, installed: true } : previous;
               });
               setInstalled(null);
+              // The roster keeps its own copy of the installed flag, so it has
+              // to be nudged too or the expert row would still offer Install.
+              setRoster(function (previous) {
+                if (!previous || !previous.experts) return previous;
+                return {
+                  ...previous,
+                  experts: previous.experts.map(function (item) {
+                    return item.stem === skill.slug ? { ...item, installed: true } : item;
+                  })
+                };
+              });
             })
             .catch(function (failure) {
               showToast(t("toast.failed", { message: (failure && failure.message) || "" }), "error");
@@ -1079,6 +1162,15 @@ window.__ModuleLoader__.load({
               });
               setDetail(function (previous) {
                 return previous && previous.id === skill.id ? { ...previous, installed: false } : previous;
+              });
+              setRoster(function (previous) {
+                if (!previous || !previous.experts) return previous;
+                return {
+                  ...previous,
+                  experts: previous.experts.map(function (item) {
+                    return item.stem === skill.slug ? { ...item, installed: false } : item;
+                  })
+                };
               });
               if (tab === "installed") loadInstalled();
             })
@@ -1250,6 +1342,186 @@ window.__ModuleLoader__.load({
         );
       }
 
+      // ── experts ─────────────────────────────────────────────────────────
+      // The roster is one flat array of 328 entries carrying their department,
+      // so it is filtered here and grouped for display rather than paged: it
+      // is small enough that a local filter is faster than a round trip.
+      var rosterExperts = (roster && roster.experts) || [];
+      var rosterDepts = (roster && roster.departments) || [];
+      var rosterRef = (roster && roster.ref) || "";
+      var expertNeedle = expertQuery.trim().toLowerCase();
+
+      var expertItems = rosterExperts
+        .filter(function (expert) {
+          if (activeDept && expert.deptKey !== activeDept) return false;
+          if (!expertNeedle) return true;
+          return (
+            String(expert.name || "").toLowerCase().indexOf(expertNeedle) >= 0 ||
+            String(expert.stem || "").toLowerCase().indexOf(expertNeedle) >= 0 ||
+            String(expert.summary || "").toLowerCase().indexOf(expertNeedle) >= 0
+          );
+        })
+        .map(function (expert) {
+          return {
+            id: "experts:" + expert.stem,
+            source: "experts",
+            slug: expert.stem,
+            name: expert.name || expert.stem,
+            summary: expert.summary || "",
+            emoji: expert.emoji || "🧑‍💼",
+            deptKey: expert.deptKey || "",
+            deptLabel: expert.deptLabel || "",
+            repoPath: expert.path,
+            repoRef: rosterRef,
+            installed: !!expert.installed
+          };
+        });
+
+      var expertGroups = [];
+      if (activeDept) {
+        expertGroups.push({ key: activeDept, label: "", experts: expertItems });
+      } else {
+        rosterDepts.forEach(function (dept) {
+          var members = expertItems.filter(function (expert) {
+            return expert.deptKey === dept.key;
+          });
+          if (members.length) {
+            expertGroups.push({ key: dept.key, label: dept.label, experts: members });
+          }
+        });
+      }
+
+      var renderExpertRow = function (expert) {
+        var installing = isBusy(expert, "install");
+        return h(
+          "div",
+          {
+            className: "dsh-sh-row",
+            key: expert.id,
+            "data-clickable": "",
+            onClick: function () {
+              openDetail(expert);
+            }
+          },
+          h("span", { className: "dsh-sh-expert-emoji", "aria-hidden": "true" }, expert.emoji),
+          h(
+            "div",
+            { className: "dsh-sh-row-body" },
+            h("div", { className: "dsh-sh-row-title" }, expert.name),
+            h("div", { className: "dsh-sh-row-desc" }, expert.summary || expert.slug)
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "dsh-sh-btn",
+              disabled: installing || expert.installed,
+              onClick: function (event) {
+                event.stopPropagation();
+                handleInstall(expert);
+              }
+            },
+            expert.installed ? t("experts.installed") : installing ? t("action.installing") : t("action.install")
+          )
+        );
+      };
+
+      var expertsBody;
+      if (detail && detail.source === "experts") {
+        if (detail.loading) {
+          expertsBody = h(StateBlock, { loading: true, text: t("loading") });
+        } else {
+          expertsBody = h(DetailView, {
+            detail: detail,
+            busy: isBusy(detail, "install") || isBusy(detail, "uninstall"),
+            onBack: function () {
+              setDetail(null);
+            },
+            onInstall: handleInstall,
+            onUninstall: handleUninstall
+          });
+        }
+      } else if (roster === null) {
+        expertsBody = h(StateBlock, { loading: true, text: t("loading") });
+      } else if (rosterError && !rosterExperts.length) {
+        expertsBody = h(
+          "div",
+          { className: "dsh-sh-state" },
+          h("div", null, rosterError),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "dsh-sh-btn",
+              onClick: function () {
+                setRoster(null);
+                loadRoster(true);
+              }
+            },
+            t("action.retry")
+          )
+        );
+      } else if (!rosterExperts.length) {
+        expertsBody = h(
+          "div",
+          { className: "dsh-sh-state" },
+          h("div", null, t("experts.empty")),
+          h("div", null, t("experts.hint"))
+        );
+      } else if (!expertItems.length) {
+        expertsBody = h("div", { className: "dsh-sh-state" }, h("div", null, t("experts.noMatch")));
+      } else {
+        expertsBody = h(
+          "div",
+          { className: "dsh-sh-list" },
+          h("div", { className: "dsh-sh-expert-note" }, t("experts.hint")),
+          expertGroups.map(function (group) {
+            return h(
+              "div",
+              { key: group.key || "all" },
+              group.label ? h("div", { className: "dsh-sh-group-title" }, group.label) : null,
+              group.experts.map(renderExpertRow)
+            );
+          })
+        );
+      }
+
+      var expertsAside = rosterExperts.length
+        ? h(
+            "aside",
+            { className: "dsh-sh-cats" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "dsh-sh-cat",
+                "data-active": !activeDept ? "" : undefined,
+                onClick: function () {
+                  setActiveDept("");
+                  setDetail(null);
+                }
+              },
+              t("experts.dept.all")
+            ),
+            rosterDepts.map(function (dept) {
+              return h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-cat",
+                  key: dept.key || dept.label,
+                  "data-active": activeDept === dept.key ? "" : undefined,
+                  onClick: function () {
+                    setActiveDept(dept.key);
+                    setDetail(null);
+                  }
+                },
+                (dept.emoji ? dept.emoji + " " : "") + (dept.label || dept.key)
+              );
+            })
+          )
+        : null;
+
       return h(
         "div",
         { className: "dsh-sh-page", style: { position: "relative" } },
@@ -1277,6 +1549,20 @@ window.__ModuleLoader__.load({
                   }
                 },
                 t("tab.market")
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-tab",
+                  role: "tab",
+                  "data-active": tab === "experts" ? "" : undefined,
+                  onClick: function () {
+                    setTab("experts");
+                    setDetail(null);
+                  }
+                },
+                t("tab.experts")
               ),
               h(
                 "button",
@@ -1360,7 +1646,39 @@ window.__ModuleLoader__.load({
                   })
                 )
               )
-            : null
+            : tab === "experts"
+              ? h(
+                  "div",
+                  { className: "dsh-sh-search-row" },
+                  h(
+                    "div",
+                    { className: "dsh-sh-search" },
+                    h("input", {
+                      className: "dsh-sh-search-input",
+                      type: "search",
+                      value: expertQuery,
+                      placeholder: t("experts.placeholder"),
+                      onChange: function (event) {
+                        setExpertQuery(event.target.value);
+                      }
+                    }),
+                    expertQuery
+                      ? h(
+                          "button",
+                          {
+                            type: "button",
+                            className: "dsh-sh-search-clear",
+                            title: t("search.clear"),
+                            onClick: function () {
+                              setExpertQuery("");
+                            }
+                          },
+                          "×"
+                        )
+                      : null
+                  )
+                )
+              : null
         ),
         h(
           "div",
@@ -1401,6 +1719,7 @@ window.__ModuleLoader__.load({
                 })
               )
             : null,
+          tab === "experts" ? expertsAside : null,
           h(
             "div",
             { className: "dsh-sh-main" },
@@ -1417,7 +1736,7 @@ window.__ModuleLoader__.load({
                       .join("; ")
                 )
               : null,
-            tab === "market" ? marketBody : installedBody
+            tab === "market" ? marketBody : tab === "installed" ? installedBody : expertsBody
           )
         ),
         h(Toast, { toast: toast })

@@ -1,7 +1,7 @@
 {
   "name": "dsh-skill-hub",
   "version": "0.1.0",
-  "description": "Aggregated skill hub for DeepSeek Harness: search SkillHub + ClawHub, preview README, install/uninstall into $DSH_HOME/skills. Registers as an official sidebar panel.",
+  "description": "Aggregated skill hub for DeepSeek Harness: search SkillHub + ClawHub + GitHub skill repos, browse an expert roster, preview README, install/uninstall into $DSH_HOME/skills. Registers as an official sidebar panel.",
   "type": "module",
   "main": "src/index.js",
   "private": true,
@@ -26,7 +26,9 @@
     "deepseek-harness",
     "skill-hub",
     "skillhub",
-    "clawhub"
+    "clawhub",
+    "experts",
+    "persona"
   ],
   "license": "MIT",
   "repository": {

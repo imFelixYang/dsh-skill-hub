@@ -61,6 +61,17 @@ const DEFAULT_GITHUB_REPOS =
   'rohitg00/awesome-claude-code-toolkit@main,' +
   'ComposioHQ/awesome-claude-skills@master'
 
+/**
+ * The Chinese expert roster. Unlike the skill catalogues this is a fixed, hand
+ * written list of role prompts, so it gets its own tab instead of being mixed
+ * into keyword search. Two documents describe it: `CATALOG.md` maps a Chinese
+ * display name to its markdown file (grouped under department headings), and
+ * `AGENT-LIST.md` carries the one line blurb for the same id.
+ */
+const DEFAULT_EXPERTS_REPO = 'jnMetaCode/agency-agents-zh@main'
+const DEFAULT_EXPERTS_CATALOG = 'CATALOG.md'
+const DEFAULT_EXPERTS_ROSTER = 'AGENT-LIST.md'
+
 const MAX_DOWNLOAD_BYTES = 24 * 1024 * 1024
 const MAX_README_CHARS = 400 * 1024
 
@@ -1221,7 +1232,259 @@ const github = {
   }
 }
 
-const SOURCES = { skillhub, clawhub, github }
+// ── experts ─────────────────────────────────────────────────────────────────
+
+/**
+ * Read one roster document.
+ *
+ * The route order here is measured, not guessed. On a mainland connection
+ * raw.githubusercontent.com timed out after 20s and cdn.jsdelivr.net answered
+ * in 17-20s, while the contents API answered in 0.9s. The roster is two small
+ * documents, so the API goes first; the plain-text hosts stay as the fallback
+ * for networks where the API is blocked or its quota is spent.
+ */
+async function getExpertFile(config, repoSpec, path, options = {}) {
+  const apiUrl =
+    trimSlash(config.githubApiBase) +
+    '/repos/' +
+    encodeURIComponent(repoSpec.owner) +
+    '/' +
+    encodeURIComponent(repoSpec.repo) +
+    '/contents/' +
+    encodePath(path) +
+    '?ref=' +
+    encodeURIComponent(repoSpec.ref)
+  const headers = { accept: 'application/vnd.github.raw' }
+  if (config.githubToken) headers.authorization = 'Bearer ' + config.githubToken
+
+  let lastError
+  for (const attempt of [
+    () => getBuffer(apiUrl, { ...options, headers }),
+    () => getGithubFile(config, repoSpec, path, options)
+  ]) {
+    try {
+      return await attempt()
+    } catch (error) {
+      if (isAbort(error) && options.signal && options.signal.aborted) throw error
+      lastError = error
+    }
+  }
+  throw lastError
+}
+
+/**
+ * `## 🛠️ 工程部 (75)` followed by `| 中文名 | `engineering/foo.md` |` rows.
+ * The department key is taken from the folder the files live in, because the
+ * headings themselves are Chinese and a folder name is what the UI can filter
+ * on without carrying a translation table.
+ */
+function parseExpertCatalog(text) {
+  const departments = []
+  const experts = []
+  let current = null
+
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const heading = line.match(/^##\s+(.+?)\s*$/)
+    if (heading) {
+      const raw = heading[1]
+      const counted = raw.match(/^(.*?)\s*\((\d+)\)\s*$/)
+      const title = counted ? counted[1] : raw
+      current = {
+        key: '',
+        label: title.replace(/^[^\p{L}\p{N}]+/u, '').trim(),
+        emoji: (title.match(/^[^\p{L}\p{N}]+/u) || [''])[0].trim(),
+        count: counted ? Number(counted[2]) : 0,
+        experts: []
+      }
+      departments.push(current)
+      continue
+    }
+
+    const row = line.match(/^\|\s*(.+?)\s*\|\s*`([^`]+\.md)`\s*\|$/)
+    if (!row || !current) continue
+    const path = row[2]
+    if (!current.key) current.key = path.includes('/') ? path.split('/')[0] : ''
+    current.experts.push({
+      stem: path.split('/').pop().replace(/\.md$/i, ''),
+      name: row[1].trim(),
+      path
+    })
+  }
+
+  for (const department of departments) {
+    for (const expert of department.experts) {
+      expert.deptKey = department.key
+      expert.deptLabel = department.label
+      expert.emoji = department.emoji
+      experts.push(expert)
+    }
+  }
+
+  return { departments: departments.filter((item) => item.experts.length), experts }
+}
+
+/** `| \`agent-id\` | 中文名 | 一句话简介 | 来源 |` */
+function parseExpertRoster(text) {
+  const blurbs = new Map()
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const row = line.match(/^\|\s*`([^`]+)`\s*\|([^|]*)\|([^|]*)\|/)
+    if (!row) continue
+    blurbs.set(row[1].trim(), row[3].trim())
+  }
+  return blurbs
+}
+
+let expertCache = { key: '', at: 0, value: null }
+
+async function loadExpertCatalog(config, signal) {
+  const repoSpec = parseRepoRef(config.expertsRepo)
+  if (!repoSpec) throw new Error(`Malformed experts repo "${config.expertsRepo}"`)
+  const key = repoSpec.owner + '/' + repoSpec.repo + '@' + repoSpec.ref
+  if (expertCache.value && expertCache.key === key && Date.now() - expertCache.at < config.cacheTtlMs) {
+    return expertCache.value
+  }
+
+  const options = { timeoutMs: config.sourceTimeoutMs, signal }
+  const [catalogText, rosterText] = await Promise.all([
+    getExpertFile(config, repoSpec, DEFAULT_EXPERTS_CATALOG, options).then((buffer) => buffer.toString('utf8')),
+    // The blurb is a nicety: a roster that fails to load still leaves a usable
+    // picker, so it must never take the catalog down with it.
+    getExpertFile(config, repoSpec, DEFAULT_EXPERTS_ROSTER, options)
+      .then((buffer) => buffer.toString('utf8'))
+      .catch(() => '')
+  ])
+
+  const parsed = parseExpertCatalog(catalogText)
+  const blurbs = parseExpertRoster(rosterText)
+  for (const expert of parsed.experts) expert.summary = blurbs.get(expert.stem) || ''
+
+  const value = {
+    repo: repoSpec.owner + '/' + repoSpec.repo,
+    ref: repoSpec.ref,
+    departments: parsed.departments,
+    experts: parsed.experts,
+    total: parsed.experts.length
+  }
+  expertCache = { key, at: Date.now(), value }
+  return value
+}
+
+function yamlScalar(value) {
+  const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim()
+  if (!text) return '""'
+  const plain = /^[A-Za-z0-9\u4e00-\u9fa5][^:#"'\n]*$/.test(text)
+  const reserved = /^(?:true|false|null|yes|no|on|off|~)$/i.test(text)
+  return plain && !reserved ? text : JSON.stringify(text)
+}
+
+/**
+ * Upstream ships each role as a persona prompt whose frontmatter carries a
+ * Chinese `name:`. The harness only accepts `^[a-z0-9]+(-[a-z0-9]+)*$` as a
+ * skill name and silently drops anything else, so the file is rewritten: the
+ * ascii id becomes `name`, and the Chinese display name moves to the front of
+ * `description`, which is where it stays visible.
+ */
+function buildExpertSkillMarkdown(expert, raw) {
+  const text = String(raw || '')
+  const front = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+  const body = front ? text.slice(front[0].length) : text
+  const data = {}
+  if (front) {
+    for (const line of front[1].split(/\r?\n/)) {
+      const field = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.*)$/)
+      if (field) data[field[1]] = field[2].trim().replace(/^["']|["']$/g, '')
+    }
+  }
+
+  const description = [expert.name, data.description || expert.summary || ''].filter(Boolean).join(' · ')
+  const header = ['---', 'name: ' + expert.stem, 'description: ' + yamlScalar(description)]
+  if (data.emoji) header.push('emoji: ' + yamlScalar(data.emoji))
+  if (data.color) header.push('color: ' + yamlScalar(data.color))
+  header.push('---', '')
+
+  // The persona files already open with their own `# 标题`; only add one when
+  // the body would otherwise start with nothing to identify the role.
+  const trimmed = body.replace(/^\s+/, '')
+  const lead = /^#{1,6}\s/.test(trimmed)
+    ? ''
+    : '# ' + expert.name + (expert.deptLabel ? '（' + expert.deptLabel + '）' : '') + '\n\n'
+  return header.join('\n') + lead + trimmed
+}
+
+async function loadExpertDetail(config, ref, signal) {
+  const repoSpec = parseRepoRef(config.expertsRepo)
+  if (!repoSpec) throw new Error(`Malformed experts repo "${config.expertsRepo}"`)
+  const path = String(ref.repoPath || '')
+  if (!path) throw new Error('expert reference is missing repoPath')
+
+  const buffer = await getExpertFile(config, repoSpec, path, {
+    timeoutMs: config.sourceTimeoutMs,
+    signal
+  })
+  const stem = String(ref.slug || path.split('/').pop().replace(/\.md$/i, ''))
+  const catalog = await loadExpertCatalog(config, signal).catch(() => null)
+  const known = catalog ? catalog.experts.find((item) => item.stem === stem) : null
+  const expert = {
+    stem,
+    name: (known && known.name) || stem,
+    deptKey: (known && known.deptKey) || '',
+    deptLabel: (known && known.deptLabel) || '',
+    summary: (known && known.summary) || ''
+  }
+  const markdown = buildExpertSkillMarkdown(expert, buffer.toString('utf8'))
+
+  return {
+    id: 'experts:' + stem,
+    source: 'experts',
+    sourceLabel: '专家',
+    slug: stem,
+    owner: repoSpec.owner + '/' + repoSpec.repo,
+    ownerName: repoSpec.owner + '/' + repoSpec.repo,
+    repoRef: repoSpec.ref,
+    repoPath: path,
+    name: expert.name,
+    summary: expert.summary,
+    summaryZh: expert.summary,
+    whenToUse: '',
+    version: '',
+    license: '',
+    updatedAt: 0,
+    iconUrl: '',
+    downloadCount: 0,
+    stars: 0,
+    category: expert.deptKey,
+    tags: [expert.deptLabel].filter(Boolean),
+    homepage:
+      'https://github.com/' + repoSpec.owner + '/' + repoSpec.repo + '/blob/' + repoSpec.ref + '/' + path,
+    security: [],
+    readme: markdown
+  }
+}
+
+const experts = {
+  id: 'experts',
+  label: '专家',
+  supportsCategory: false,
+  // A curated roster is browsed, not searched: it stays out of searchAcross and
+  // is served whole by its own endpoint.
+  standalone: true,
+
+  detail(config, ref, signal) {
+    return loadExpertDetail(config, ref, signal)
+  },
+
+  async readme(config, ref, signal) {
+    const detail = await loadExpertDetail(config, ref, signal)
+    return { fileName: 'SKILL.md', content: detail.readme }
+  },
+
+  async install(config, ref, signal) {
+    const detail = await loadExpertDetail(config, ref, signal)
+    return [{ name: 'SKILL.md', data: Buffer.from(detail.readme, 'utf8') }]
+  }
+}
+
+const SOURCES = { skillhub, clawhub, github, experts }
 
 // ── aggregation ─────────────────────────────────────────────────────────────
 
@@ -1708,6 +1971,11 @@ function resolveConfig(config = {}) {
     enableClawHub: config.enableClawHub !== false,
     enableGitHub: config.enableGitHub !== false,
     githubRepos: parseRepoList(config.githubRepos || DEFAULT_GITHUB_REPOS),
+    expertsRepo:
+      typeof config.expertsRepo === 'string' && config.expertsRepo.trim()
+        ? config.expertsRepo.trim()
+        : DEFAULT_EXPERTS_REPO,
+    enableExperts: config.enableExperts !== false,
     sourceTimeoutMs: toPositiveInt(config.sourceTimeoutMs, 8000, 60000),
     downloadTimeoutMs: toPositiveInt(config.downloadTimeoutMs, 60000, 300000),
     cacheTtlMs: toPositiveInt(config.cacheTtlMs, 600000, 86400000)
@@ -1733,6 +2001,21 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
     case 'categories': {
       const list = await loadCategories(resolved, signal)
       return ok({ categories: [{ key: '', name: '全部', nameEn: 'All', sortOrder: -1 }, ...list] })
+    }
+
+    case 'experts': {
+      if (!resolved.enableExperts) return ok({ repo: '', ref: '', departments: [], experts: [], total: 0 })
+      const catalog = await loadExpertCatalog(resolved, signal)
+      const installed = new Set(
+        listLocalSkills(resolveSkillsDir(resolved)).map((item) => item.slug.toLowerCase())
+      )
+      return ok({
+        ...catalog,
+        experts: catalog.experts.map((expert) => ({
+          ...expert,
+          installed: installed.has(expert.stem.toLowerCase())
+        }))
+      })
     }
 
     case 'search': {
@@ -1783,7 +2066,7 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
 
 // ── plugin entry ────────────────────────────────────────────────────────────
 
-const ENDPOINTS = ['sources', 'categories', 'search', 'detail', 'installed', 'install', 'uninstall']
+const ENDPOINTS = ['sources', 'categories', 'experts', 'search', 'detail', 'installed', 'install', 'uninstall']
 
 export function apply(ctx, config = {}) {
   const resolved = resolveConfig(config)

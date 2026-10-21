@@ -184,6 +184,7 @@ host.apply(
 const expectedPaths = [
   "/api/skill-hub/categories",
   "/api/skill-hub/detail",
+  "/api/skill-hub/experts",
   "/api/skill-hub/install",
   "/api/skill-hub/installed",
   "/api/skill-hub/search",
@@ -191,7 +192,7 @@ const expectedPaths = [
   "/api/skill-hub/uninstall"
 ];
 const actualPaths = routes.map((r) => r.path).sort();
-check("seven RPC routes", JSON.stringify(actualPaths) === JSON.stringify(expectedPaths), JSON.stringify(actualPaths));
+check("eight RPC routes", JSON.stringify(actualPaths) === JSON.stringify(expectedPaths), JSON.stringify(actualPaths));
 check("all routes POST only", routes.every((r) => JSON.stringify(r.methods) === JSON.stringify(["POST"])));
 check("all routes have a fetch handler", routes.every((r) => typeof r.fetch === "function"));
 
@@ -430,6 +431,136 @@ check(
   "overwrite:true passes the collision guard",
   allowed.result?.ok === false && !/占用/.test(allowed.result?.error?.message || ""),
   allowed.result?.error?.message
+);
+
+// ── 6d. Experts are rewritten into loadable skills ───────────────────
+//
+// Upstream ships each role as a persona prompt with a Chinese `name:` in its
+// frontmatter. The harness only accepts `^[a-z0-9]+(-[a-z0-9]+)*$` as a skill
+// name and drops anything else, so the install path has to rewrite the file.
+// These checks pin that behaviour: the ascii id becomes `name`, the Chinese
+// display name survives in `description`, and the persona body is untouched.
+
+const EXPERT_CATALOG = [
+  "# 智能体速查表",
+  "",
+  "## 🛠️ 工程部 (2)",
+  "",
+  "| 中文名 | 文件路径 |",
+  "|--------|----------|",
+  "| 前端开发者 | `engineering/engineering-frontend-developer.md` |",
+  "| 后端架构师 | `engineering/engineering-backend-architect.md` |",
+  "",
+  "## 📖 学术部 (1)",
+  "",
+  "| 中文名 | 文件路径 |",
+  "|--------|----------|",
+  "| 历史学家 | `academic/academic-historian.md` |"
+].join("\n");
+
+const EXPERT_ROSTER = [
+  "| Agent ID | 中文名 | 描述 | 来源 |",
+  "|----------|--------|------|------|",
+  "| `engineering-frontend-developer` | 前端开发者 | 前端开发专家，精通 React | 翻译 |",
+  "| `academic-historian` | 历史学家 | 历史研究专家 | 原创 |"
+].join("\n");
+
+const EXPERT_FILE = [
+  "---",
+  "name: 前端开发者",
+  "description: 精通现代 Web 技术、UI 框架和性能优化",
+  "emoji: 💻",
+  "color: cyan",
+  "---",
+  "",
+  "# 前端开发者 Agent 人格",
+  "",
+  "你是 **前端开发者**，一位精通现代 Web 技术的专家。"
+].join("\n");
+
+globalThis.fetch = async (url) => {
+  const target = String(url);
+  const serve = (body) => new Response(body, { status: 200, headers: { "content-type": "text/plain" } });
+  if (target.includes("CATALOG.md")) return serve(EXPERT_CATALOG);
+  if (target.includes("AGENT-LIST.md")) return serve(EXPERT_ROSTER);
+  if (target.includes("engineering-frontend-developer.md")) return serve(EXPERT_FILE);
+  return new Response("not found", { status: 404 });
+};
+
+const catalogOut = await callRoute("experts", {});
+const catalogValue = catalogOut.result?.value || {};
+check("experts route succeeds", catalogOut.result?.ok === true, JSON.stringify(catalogOut.result).slice(0, 160));
+check("catalog lists every expert", catalogValue.total === 3, String(catalogValue.total));
+check(
+  "departments keep their ascii folder key and Chinese label",
+  catalogValue.departments?.length === 2 &&
+    catalogValue.departments[0].key === "engineering" &&
+    catalogValue.departments[0].label === "工程部" &&
+    catalogValue.departments[1].key === "academic",
+  JSON.stringify(catalogValue.departments?.map((d) => [d.key, d.label]))
+);
+check(
+  "the roster blurb is joined onto the matching expert",
+  catalogValue.experts?.find((e) => e.stem === "engineering-frontend-developer")?.summary ===
+    "前端开发专家，精通 React",
+  JSON.stringify(catalogValue.experts?.map((e) => [e.stem, e.summary]))
+);
+check(
+  "an expert missing from the roster still lists, without a blurb",
+  catalogValue.experts?.find((e) => e.stem === "engineering-backend-architect")?.summary === ""
+);
+
+const expertDetail = await callRoute("detail", {
+  source: "experts",
+  slug: "engineering-frontend-developer",
+  repoPath: "engineering/engineering-frontend-developer.md"
+});
+const expertMarkdown = expertDetail.result?.value?.readme || "";
+const expertName = (expertMarkdown.match(/^name:\s*(.+)$/m) || [])[1] || "";
+check(
+  "the skill name is the ascii id, not the Chinese title",
+  expertName === "engineering-frontend-developer",
+  JSON.stringify(expertName)
+);
+check(
+  "the generated name satisfies the harness name rule",
+  /^[a-z0-9]+(-[a-z0-9]+)*$/.test(expertName),
+  JSON.stringify(expertName)
+);
+check(
+  "the Chinese display name survives in description",
+  /^description:\s*.+前端开发者/m.test(expertMarkdown),
+  (expertMarkdown.match(/^description:.*$/m) || [])[0]
+);
+check(
+  "the persona body is preserved",
+  expertMarkdown.includes("# 前端开发者 Agent 人格") && expertMarkdown.includes("精通现代 Web 技术的专家"),
+  expertMarkdown.slice(0, 120)
+);
+check("the original Chinese name: line is gone", !/^name:\s*前端开发者$/m.test(expertMarkdown));
+
+const expertInstall = await callRoute("install", {
+  source: "experts",
+  slug: "engineering-frontend-developer",
+  repoPath: "engineering/engineering-frontend-developer.md"
+});
+check("expert install succeeds", expertInstall.result?.ok === true, JSON.stringify(expertInstall.result).slice(0, 200));
+
+const writtenSkill = join(scratchSkills, "engineering-frontend-developer", "SKILL.md");
+const writtenText = readFileSync(writtenSkill, "utf8");
+check(
+  "the installed SKILL.md carries the ascii name",
+  /^name:\s*engineering-frontend-developer$/m.test(writtenText),
+  (writtenText.match(/^name:.*$/m) || [])[0]
+);
+check("the installed SKILL.md keeps the persona body", writtenText.includes("前端开发者 Agent 人格"));
+
+const expertSourcesOut = await callRoute("sources", {});
+const sourceIds = (expertSourcesOut.result?.value?.sources || []).map((entry) => entry.id);
+check(
+  "experts stay out of keyword search sources",
+  sourceIds.length === 3 && !sourceIds.includes("experts"),
+  JSON.stringify(sourceIds)
 );
 
 globalThis.fetch = realFetch;
