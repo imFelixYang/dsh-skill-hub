@@ -270,6 +270,23 @@ window.__ModuleLoader__.load({
         .replace(/"/g, "&quot;");
     }
 
+    // A README is remote content. Escaping markup is not enough on its own:
+    // `[x](javascript:...)` would still produce a live script URL. Only allow
+    // schemes that cannot execute, plus in-page anchors and relative paths.
+    function safeUrl(raw) {
+      var url = String(raw || "").trim();
+      if (!url) return "";
+      // Drop control characters, which browsers ignore when parsing a scheme.
+      url = url.replace(/[\u0000-\u001F\u007F]/g, "");
+      if (url.charAt(0) === "#") return url;
+      if (/^https?:\/\//i.test(url)) return url;
+      if (/^mailto:/i.test(url)) return url;
+      // Relative paths only: no scheme, no protocol-relative "//host".
+      if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return "";
+      if (url.slice(0, 2) === "//") return "";
+      return url;
+    }
+
     function renderMarkdown(md) {
       if (!md) return "";
       var lines = String(md).split("\n");
@@ -290,8 +307,18 @@ window.__ModuleLoader__.load({
       text = text.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
       text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-      text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img alt="$1" src="$2" />');
-      text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      // `text` is already HTML-escaped above, so alt/label/href arrive escaped
+      // and must not be escaped a second time.
+      text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (m, alt, src) {
+        var safe = safeUrl(src);
+        if (!safe) return alt || "";
+        return '<img alt="' + alt + '" src="' + safe + '" />';
+      });
+      text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, label, href) {
+        var safe = safeUrl(href);
+        if (!safe) return label;
+        return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+      });
       text = text.replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>");
       text = text.replace(/^---$/gm, "<hr/>");
 

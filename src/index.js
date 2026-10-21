@@ -347,6 +347,26 @@ function safeEntryPath(name) {
 }
 
 /**
+ * Validate a skill directory name before it is joined onto the skills root.
+ *
+ * `slug` arrives from two untrusted places: the RPC payload and the remote
+ * catalogue. A value such as ".." would make join() escape the skills
+ * directory, and install/uninstall call rmSync on the result — that would
+ * delete unrelated directories such as the whole DSH home. Only a single
+ * plain path segment is acceptable.
+ *
+ * Returns the name, or null when it must be rejected.
+ */
+function safeSkillDirName(name) {
+  const value = String(name ?? '').trim()
+  if (!value || value === '.' || value === '..') return null
+  if (/[/\\]/.test(value)) return null // no path separators of either style
+  if (/^[a-zA-Z]:/.test(value)) return null // no drive prefix
+  if (value.includes('\0')) return null // no NUL injection
+  return value
+}
+
+/**
  * Parse a ZIP archive from memory and write its entries under `targetDir`.
  *
  * Reads the central directory rather than walking local headers: local headers
@@ -540,13 +560,17 @@ function parseFrontmatter(text) {
  * Read a skill's README.md or SKILL.md content.
  */
 function readSkillFile(skillsDir, skillName, fileName) {
+  // skillName is remote-influenced, so it must not carry path separators;
+  // readSkillFile also bottoms out in readFileSync.
+  const safeName = safeSkillDirName(skillName)
+  if (!safeName) return null
   // Try exact directory name first, then case-insensitive
-  let skillDir = join(skillsDir, skillName)
+  let skillDir = join(skillsDir, safeName)
   if (!existsSync(skillDir)) {
     // Search for case-insensitive match
     if (existsSync(skillsDir)) {
       const entries = readdirSync(skillsDir, { withFileTypes: true })
-      const match = entries.find(e => e.isDirectory() && e.name.toLowerCase() === skillName.toLowerCase())
+      const match = entries.find(e => e.isDirectory() && e.name.toLowerCase() === safeName.toLowerCase())
       if (match) {
         skillDir = join(skillsDir, match.name)
       } else {
@@ -557,8 +581,12 @@ function readSkillFile(skillsDir, skillName, fileName) {
     }
   }
 
-  // Try the requested file, then README.md, then SKILL.md
-  const candidates = [fileName, 'README.md', 'SKILL.md'].filter(Boolean)
+  // Try the requested file, then README.md, then SKILL.md. `fileName` also
+  // comes from the caller, so drop it when it is not a bare file name.
+  const requested = fileName && !/[/\\]/.test(String(fileName)) && String(fileName) !== '..'
+    ? fileName
+    : ''
+  const candidates = [requested, 'README.md', 'SKILL.md'].filter(Boolean)
   for (const candidate of candidates) {
     const filePath = join(skillDir, candidate)
     if (existsSync(filePath)) {
@@ -849,8 +877,11 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
         }
       }
 
-      // Extract to skills directory
-      const targetDir = join(skillsDir, slug)
+      // Extract to skills directory. The slug becomes a directory name and the
+      // result is later rmSync'd, so it must be a single safe path segment.
+      const safeSlug = safeSkillDirName(slug)
+      if (!safeSlug) return err('bad-request', `Invalid skill slug: ${String(slug).slice(0, 80)}`)
+      const targetDir = join(skillsDir, safeSlug)
       // Clean existing directory if any
       if (existsSync(targetDir)) {
         rmSync(targetDir, { recursive: true, force: true })
@@ -916,12 +947,15 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
       const { slug } = args
       if (!slug) return err('bad-request', 'slug is required')
 
-      const targetDir = join(skillsDir, slug)
+      // Same containment rule as install: this path is rmSync'd recursively.
+      const safeSlug = safeSkillDirName(slug)
+      if (!safeSlug) return err('bad-request', `Invalid skill slug: ${String(slug).slice(0, 80)}`)
+      const targetDir = join(skillsDir, safeSlug)
       if (!existsSync(targetDir)) {
         // Try case-insensitive search
         if (existsSync(skillsDir)) {
           const entries = readdirSync(skillsDir, { withFileTypes: true })
-          const match = entries.find(e => e.isDirectory() && e.name.toLowerCase() === slug.toLowerCase())
+          const match = entries.find(e => e.isDirectory() && e.name.toLowerCase() === safeSlug.toLowerCase())
           if (match) {
             rmSync(join(skillsDir, match.name), { recursive: true, force: true })
             return ok({ slug, uninstalled: true, message: `Skill "${match.name}" removed` })

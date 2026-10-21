@@ -11,12 +11,17 @@
 //   3. the sidebar glyph honours the `size` prop the shell passes;
 //   4. the host half registers exactly the seven documented RPC routes, POST
 //      only, and answers GET → 404 / bad body → 400 before touching the network;
-//   5. the markdown renderer escapes HTML and produces balanced tags.
+//   5. the markdown renderer escapes HTML, produces balanced tags, and drops
+//      executable URLs (a README is remote content);
+//   6. a traversing `slug` cannot escape the skills directory — install and
+//      uninstall build a path from it and then rmSync recursively.
 //
 // Visual behaviour (row alignment, theme colours) is verified by installing the
 // bundle into DSH — see the README.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let failures = 0;
 
@@ -156,7 +161,10 @@ check("host name", host.name === "dsh-skill-hub", host.name);
 check("host injects connection + skills", JSON.stringify(host.inject) === JSON.stringify(["connection", "skills"]));
 
 const routes = [];
-host.apply({ connection: { fetch: { register: (spec) => routes.push(spec) } }, skills: {} }, {});
+// Point the skills root at a scratch directory: the uninstall route below really
+// does rmSync when a slug passes validation, and it must never reach ~/.dsh.
+const scratchSkills = mkdtempSync(join(tmpdir(), "dsh-skill-hub-test-"));
+host.apply({ connection: { fetch: { register: (spec) => routes.push(spec) } }, skills: {} }, { localSkillsDir: scratchSkills });
 
 const expectedPaths = [
   "/api/skill-hub/categories",
@@ -240,6 +248,52 @@ for (const tag of ["p", "ul", "li", "table", "tr", "td", "pre", "code", "strong"
 
 const hostile = renderMarkdown('<script>alert(1)</script> & "q"');
 check("html escaped", !hostile.includes("<script>") && hostile.includes("&lt;script&gt;"));
+
+// A README is remote content, so an executable URL must not survive as a link.
+for (const bad of [
+  "[x](javascript:alert(1))",
+  "[x](JaVaScRiPt:alert(1))",
+  "[x](data:text/html;base64,PHNjcmlwdD4=)",
+  "[x](vbscript:msgbox)",
+  "![i](javascript:alert(1))",
+]) {
+  const out = renderMarkdown(bad);
+  check(`drops unsafe url: ${bad}`, !/javascript:|vbscript:|data:/i.test(out), out);
+}
+check("keeps https links", /href="https:\/\/example\.com"/.test(renderMarkdown("[a](https://example.com)")));
+check("keeps relative links", /href="\.\/docs\/a\.md"/.test(renderMarkdown("[a](./docs/a.md)")));
+check("keeps anchors", /href="#install"/.test(renderMarkdown("[a](#install)")));
+
+// ── 4b. Path containment ─────────────────────────────────────────────
+//
+// install/uninstall build a directory from `slug` and then rmSync it, and the
+// slug comes from the RPC payload and the remote catalogue. A traversing value
+// would let a request delete anything the host can reach, so exercise the guard
+// through the public route rather than trusting inspection.
+
+const install = routes.find((r) => r.path === "/api/skill-hub/install");
+const uninstall = routes.find((r) => r.path === "/api/skill-hub/uninstall");
+
+const callRoute = async (route, payload) => {
+  const res = await route.fetch(
+    new Request("http://x", { method: "POST", body: JSON.stringify({ rpcId: "t", payload: { args: payload } }) })
+  );
+  return res.json();
+};
+
+for (const evil of ["..", ".", "../escape", "..\\escape", "a/b", "a\\b", "C:evil", "", "   "]) {
+  const out = await callRoute(uninstall, { slug: evil });
+  check(`uninstall rejects slug ${JSON.stringify(evil)}`, out.result?.ok === false, JSON.stringify(out.result));
+}
+
+// A well-formed slug must still reach the normal path (and here fail only
+// because nothing is installed), proving the guard is not a blanket refusal.
+const normal = await callRoute(uninstall, { slug: "some-real-skill" });
+check(
+  "uninstall still handles a normal slug",
+  normal.result?.ok === false && /not installed/i.test(normal.result.error.message),
+  JSON.stringify(normal.result)
+);
 
 // ── Result ───────────────────────────────────────────────────────────
 
