@@ -1,23 +1,15 @@
 /**
- * dsh-skill-hub — Client half
+ * dsh-skill-hub — browser half.
  *
- * Aggregated skill hub: search SkillHub + ClawHub in one place, preview a
- * skill's README, install / uninstall it into $DSH_HOME/skills.
+ * Contributes three things through the host's public slot contracts:
+ *   sidebar.panellist        one row in the shell's own panel list
+ *   main                     the centre-column page that row switches to
+ *   conversation.input.left  a chip beside the composer that inserts /<skill>
  *
- * This half only claims official seats:
- *   - `sidebar.panellist` — the row in the shell's own panel list
- *   - `main`              — the page that row switches the centre column to
- *   - `conversation.input.left` — a convenience picker next to the composer
- *
- * It never touches the host's DOM: no injected sidebar rows, no brand swaps,
- * no renaming of built-in entries. The shell owns row geometry, label colour,
- * hover, the collapsed rail and the panel switch, so the row lines up with
- * its neighbours by construction.
- *
- * Styling uses only `--dsw-alias-*` theme tokens, so the plugin follows
- * whatever theme is active (built-in, OpenCode palette, custom skin).
+ * It never touches the DOM outside its own components, never reads another
+ * plugin's markup, and styles itself exclusively with --dsw-alias-* tokens so
+ * it follows whatever theme is active.
  */
-
 window.__ModuleLoader__.load({
   id: "dsh-skill-hub",
   factory: (require) => {
@@ -30,938 +22,1595 @@ window.__ModuleLoader__.load({
     var useState = React.useState;
     var useEffect = React.useEffect;
     var useRef = React.useRef;
+    var useCallback = React.useCallback;
+    var useMemo = React.useMemo;
 
-    var PANEL_ID = "skill-hub";
-    var PANEL_ORDER = -1;
-    var INPUT_ORDER = 100;
-
-    // ── Locale ───────────────────────────────────────────────────────
-    //
-    // Visible text goes through the host's locale service, registered in
-    // `apply`. The table below is also the offline fallback, so the panel
-    // still renders if the shell has no locale service.
+    // ── locale ────────────────────────────────────────────────────────────
 
     var NS = "dsh-skill-hub";
 
     var DICT = {
       zh: {
-        "page.title": "技能中心",
-        "page.searchPlaceholder": "搜索技能（SkillHub + ClawHub）",
-        "page.sourceTitle": "搜索来源",
+        "panel.title": "技能中心",
         "tab.market": "技能市场",
         "tab.installed": "已安装",
-        "cat.all": "全部分类",
-        "src.all": "全部来源",
-        "src.local": "本地",
-        "stat.downloads": "下载 {n}",
-        "stat.stars": "收藏 {n}",
-        "stat.wan": "万",
-        "meta.version": "版本 v{v}",
-        "meta.author": "作者 {a}",
-        "section.readme": "说明",
-        "btn.detail": "详情",
-        "btn.install": "安装",
-        "btn.uninstall": "卸载",
-        "btn.back": "← 返回",
-        "badge.installed": "已安装",
-        "state.loading": "加载中…",
-        "state.searching": "正在搜索…",
-        "state.empty": "没有可显示的内容",
-        "state.noResults": "没有找到匹配的技能",
-        "state.noInstalled": "还没有安装任何技能",
-        "state.noReadme": "这个技能没有附带说明文档",
-        "err.request": "请求失败",
-        "err.detail": "加载详情失败: {e}",
-        "err.install": "安装失败: {e}",
-        "err.uninstall": "卸载失败: {e}",
-        "toast.installed": "已安装 {name}",
-        "toast.uninstalled": "已卸载 {name}",
-        "confirm.uninstall": "确定要卸载「{name}」吗？",
-        "picker.button": "技能",
-        "picker.title": "选择要插入的技能",
-        "picker.filter": "筛选已安装技能…",
-        "picker.noMatch": "没有匹配的技能",
-        "picker.empty": "还没有安装技能",
+        "search.placeholder": "搜索技能…",
+        "search.clear": "清除",
+        "source.all": "全部来源",
+        "category.all": "全部",
+        "action.install": "安装",
+        "action.installing": "安装中…",
+        "action.installed": "已安装",
+        "action.uninstall": "卸载",
+        "action.use": "使用",
+        "action.detail": "详情",
+        "action.back": "返回",
+        "action.retry": "重试",
+        "action.loadMore": "加载更多",
+        "empty.market": "没有匹配的技能",
+        "empty.hint": "换个关键词，或切换来源试试",
+        "empty.installed": "还没有安装任何技能",
+        "loading": "加载中…",
+        "error.generic": "出错了",
+        "error.partial": "部分来源不可用",
+        "installed.dir": "技能目录",
+        "detail.version": "版本",
+        "detail.author": "作者",
+        "detail.downloads": "下载",
+        "detail.stars": "收藏",
+        "detail.category": "分类",
+        "detail.license": "许可",
+        "detail.source": "来源",
+        "detail.readme": "说明",
+        "detail.readmeEmpty": "该技能没有提供说明文档",
+        "toast.installed": "已安装「{name}」",
+        "toast.uninstalled": "已卸载「{name}」",
+        "toast.failed": "操作失败：{message}",
+        "composer.button": "技能",
+        "composer.hint": "插入一个技能指令"
       },
       en: {
-        "page.title": "Skill Hub",
-        "page.searchPlaceholder": "Search skills (SkillHub + ClawHub)",
-        "page.sourceTitle": "Search source",
+        "panel.title": "Skills",
         "tab.market": "Market",
         "tab.installed": "Installed",
-        "cat.all": "All categories",
-        "src.all": "All sources",
-        "src.local": "Local",
-        "stat.downloads": "{n} downloads",
-        "stat.stars": "{n} stars",
-        "stat.wan": "万",
-        "meta.version": "v{v}",
-        "meta.author": "by {a}",
-        "section.readme": "About",
-        "btn.detail": "Details",
-        "btn.install": "Install",
-        "btn.uninstall": "Uninstall",
-        "btn.back": "← Back",
-        "badge.installed": "Installed",
-        "state.loading": "Loading…",
-        "state.searching": "Searching…",
-        "state.empty": "Nothing to show",
-        "state.noResults": "No matching skills",
-        "state.noInstalled": "No skills installed yet",
-        "state.noReadme": "This skill ships no documentation",
-        "err.request": "Request failed",
-        "err.detail": "Could not load details: {e}",
-        "err.install": "Install failed: {e}",
-        "err.uninstall": "Uninstall failed: {e}",
-        "toast.installed": "Installed {name}",
-        "toast.uninstalled": "Uninstalled {name}",
-        "confirm.uninstall": "Uninstall “{name}”?",
-        "picker.button": "Skills",
-        "picker.title": "Insert a skill",
-        "picker.filter": "Filter installed skills…",
-        "picker.noMatch": "No matching skills",
-        "picker.empty": "No skills installed yet",
-      },
+        "search.placeholder": "Search skills…",
+        "search.clear": "Clear",
+        "source.all": "All sources",
+        "category.all": "All",
+        "action.install": "Install",
+        "action.installing": "Installing…",
+        "action.installed": "Installed",
+        "action.uninstall": "Uninstall",
+        "action.use": "Use",
+        "action.detail": "Details",
+        "action.back": "Back",
+        "action.retry": "Retry",
+        "action.loadMore": "Load more",
+        "empty.market": "No matching skills",
+        "empty.hint": "Try another keyword or a different source",
+        "empty.installed": "No skills installed yet",
+        "loading": "Loading…",
+        "error.generic": "Something went wrong",
+        "error.partial": "Some sources are unavailable",
+        "installed.dir": "Skills directory",
+        "detail.version": "Version",
+        "detail.author": "Author",
+        "detail.downloads": "Downloads",
+        "detail.stars": "Stars",
+        "detail.category": "Category",
+        "detail.license": "License",
+        "detail.source": "Source",
+        "detail.readme": "Readme",
+        "detail.readmeEmpty": "This skill ships no readme",
+        "toast.installed": "Installed “{name}”",
+        "toast.uninstalled": "Uninstalled “{name}”",
+        "toast.failed": "Action failed: {message}",
+        "composer.button": "Skills",
+        "composer.hint": "Insert a skill command"
+      }
     };
 
     function detectLocale() {
       try {
-        var lang = (document && document.documentElement && document.documentElement.lang) || "";
-        if (/^en(?:-|$)/i.test(lang)) return "en";
-      } catch (e) { /* not a browser */ }
+        var lang = document.documentElement && document.documentElement.lang;
+        if (lang && /^en(?:-|$)/i.test(lang)) return "en";
+      } catch (e) {
+        /* ignore */
+      }
       return "zh";
     }
 
-    var currentLocale = detectLocale();
+    var activeLocale = detectLocale();
 
-    function t(key, params) {
-      var table = DICT[currentLocale] || DICT.zh;
-      var text = table[key];
-      if (text === undefined) text = DICT.zh[key];
-      if (text === undefined) return key;
+    function translate(key, params) {
+      var table = DICT[activeLocale] || DICT.zh;
+      var text = table[key] || DICT.en[key] || key;
       if (params) {
         Object.keys(params).forEach(function (name) {
-          text = String(text).split("{" + name + "}").join(String(params[name]));
+          text = String(text).replace("{" + name + "}", params[name]);
         });
       }
       return text;
     }
 
-    // ── Styles ───────────────────────────────────────────────────────
+    var t = translate;
+
+    /** Bind the host locale service when it is reachable; keep the local guess otherwise. */
+    function bindLocale(ctx) {
+      try {
+        var locale = (typeof ctx.get === "function" ? ctx.get("locale") : undefined) || ctx.locale;
+        if (!locale || typeof locale.register !== "function") return;
+        try {
+          locale.register(NS, DICT);
+        } catch (e) {
+          /* registering twice throws; the first registration wins */
+        }
+        if (typeof locale.bind === "function") {
+          var bound = locale.bind(NS);
+          if (typeof bound === "function") t = bound;
+        }
+      } catch (e) {
+        /* no locale service — fall back to the document language */
+      }
+    }
+
+    // ── styles ────────────────────────────────────────────────────────────
 
     var CSS = [
-      // Shell page frame: fill the centre column the shell hands us.
-      ".dsh-sh-root{display:flex;flex-direction:column;box-sizing:border-box;width:100%;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base,#1a1a2e);color:var(--dsw-alias-label-primary,#e0e0e0);font-size:14px;line-height:1.5}",
+      ".dsh-sh-page{display:flex;flex-direction:column;height:100%;min-height:0;width:100%;min-width:0;",
+      "background:var(--dsw-alias-bg-base,#1a1a2e);color:var(--dsw-alias-label-primary,#e0e0e0);",
+      "font-size:14px;line-height:1.45;box-sizing:border-box}",
 
-      // Header
-      ".dsh-sh-head{display:flex;align-items:center;gap:12px;flex:none;padding:14px 20px;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.08))}",
-      ".dsh-sh-title{margin:0;font-size:16px;font-weight:600;white-space:nowrap}",
-      ".dsh-sh-search{display:flex;align-items:center;gap:8px;flex:1;min-width:0;height:34px;box-sizing:border-box;padding:0 12px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-module-platform,rgba(128,128,128,0.12))}",
-      ".dsh-sh-search:focus-within{border-color:var(--dsw-alias-brand-primary,#818cf8)}",
-      ".dsh-sh-search input{flex:1;min-width:0;border:none;outline:none;background:transparent;color:inherit;font:inherit}",
-      ".dsh-sh-search input::placeholder{color:var(--dsw-alias-label-tertiary,#8a8a8a)}",
-      ".dsh-sh-src{flex:none;height:34px;box-sizing:border-box;padding:0 8px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-module-platform,rgba(128,128,128,0.12));color:inherit;font:inherit;outline:none;cursor:pointer}",
+      ".dsh-sh-top{flex:none;display:flex;flex-direction:column;gap:10px;padding:14px 18px 10px;",
+      "border-bottom:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
 
-      // Tabs
-      ".dsh-sh-tabs{display:flex;gap:4px;flex:none;padding:8px 20px 0;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.08))}",
-      ".dsh-sh-tab{box-sizing:border-box;padding:6px 12px 8px;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary,#a0a0a0);font:inherit;cursor:pointer;white-space:nowrap}",
-      ".dsh-sh-tab:hover{color:var(--dsw-alias-label-primary,#e0e0e0)}",
-      ".dsh-sh-tab[data-active]{color:var(--dsw-alias-label-primary,#e0e0e0);border-bottom-color:var(--dsw-alias-brand-primary,#818cf8);font-weight:600}",
+      ".dsh-sh-title-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}",
+      ".dsh-sh-heading{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}",
 
-      // Body: category rail + content
-      ".dsh-sh-body{display:flex;flex:1;min-height:0}",
-      ".dsh-sh-rail{display:flex;flex-direction:column;gap:2px;flex:none;width:150px;box-sizing:border-box;padding:10px 8px;overflow-y:auto;border-right:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.08))}",
-      ".dsh-sh-rail button{box-sizing:border-box;width:100%;padding:6px 10px;border:none;border-radius:var(--dsw-radius-md,8px);background:transparent;color:var(--dsw-alias-label-secondary,#a0a0a0);font:inherit;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-      ".dsh-sh-rail button:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,0.12));color:var(--dsw-alias-label-primary,#e0e0e0)}",
-      ".dsh-sh-rail button[data-active]{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,0.12));color:var(--dsw-alias-label-primary,#e0e0e0);font-weight:600}",
-      ".dsh-sh-content{flex:1;min-width:0;overflow-y:auto;padding:12px 20px 24px}",
+      ".dsh-sh-tabs{display:inline-flex;gap:2px;padding:2px;margin-left:auto;",
+      "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.05));",
+      "border:1px solid var(--dsw-alias-border-l1,transparent);border-radius:10px}",
+      ".dsh-sh-tab{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "font:inherit;font-size:13px;padding:4px 12px;border-radius:8px;cursor:pointer;white-space:nowrap}",
+      ".dsh-sh-tab:hover{color:var(--dsw-alias-label-primary,#fff)}",
+      ".dsh-sh-tab[data-active]{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1));",
+      "color:var(--dsw-alias-label-primary,#fff);font-weight:600}",
 
-      // Card grid
-      ".dsh-sh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}",
-      ".dsh-sh-card{display:flex;flex-direction:column;gap:8px;box-sizing:border-box;padding:12px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-module-platform,rgba(128,128,128,0.08));min-width:0}",
-      ".dsh-sh-card:hover{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,0.2))}",
-      ".dsh-sh-card-head{display:flex;align-items:flex-start;gap:8px;min-width:0}",
-      ".dsh-sh-card-title{margin:0;font-size:14px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".dsh-sh-card-desc{margin:0;font-size:12px;line-height:1.55;color:var(--dsw-alias-label-secondary,#a0a0a0);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}",
-      ".dsh-sh-card-stats{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8a8a);flex-wrap:wrap}",
-      ".dsh-sh-card-actions{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:4px}",
+      ".dsh-sh-search-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}",
+      ".dsh-sh-search{position:relative;flex:1;min-width:180px;display:flex;align-items:center}",
+      ".dsh-sh-search-input{width:100%;box-sizing:border-box;padding:8px 30px 8px 12px;font:inherit;font-size:13px;",
+      "color:var(--dsw-alias-label-primary,#e0e0e0);",
+      "background:var(--dsw-alias-bg-layer-1,rgba(0,0,0,.2));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.12));border-radius:9px;outline:none}",
+      ".dsh-sh-search-input:focus{border-color:var(--dsw-alias-brand-primary,#6366f1)}",
+      ".dsh-sh-search-input::placeholder{color:var(--dsw-alias-label-tertiary,#808080)}",
+      ".dsh-sh-search-clear{position:absolute;right:6px;appearance:none;border:none;background:transparent;",
+      "color:var(--dsw-alias-label-tertiary,#808080);cursor:pointer;font-size:15px;line-height:1;padding:4px}",
+      ".dsh-sh-search-clear:hover{color:var(--dsw-alias-label-primary,#fff)}",
 
-      // Buttons
-      ".dsh-sh-btn{box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.12));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-button-elevated-fill,rgba(128,128,128,0.1));color:var(--dsw-alias-label-primary,#e0e0e0);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}",
-      ".dsh-sh-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,0.18))}",
-      ".dsh-sh-btn:disabled{opacity:.5;cursor:default}",
-      ".dsh-sh-btn[data-kind=primary]{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary,#818cf8));border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}",
-      ".dsh-sh-btn[data-kind=danger]{color:var(--dsw-alias-state-error-primary,#f87171);border-color:var(--dsw-alias-state-error-primary,rgba(248,113,113,.4))}",
+      ".dsh-sh-sources{display:inline-flex;gap:6px;flex-wrap:wrap}",
+      ".dsh-sh-chip{appearance:none;font:inherit;font-size:12px;padding:4px 10px;border-radius:999px;cursor:pointer;",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "background:transparent;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
+      ".dsh-sh-chip:hover{color:var(--dsw-alias-label-primary,#fff);",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}",
+      ".dsh-sh-chip[data-active]{color:var(--dsw-alias-label-primary,#fff);font-weight:600;",
+      "border-color:var(--dsw-alias-brand-primary,#6366f1);",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
 
-      // Badges / tags
-      ".dsh-sh-badge{display:inline-flex;align-items:center;flex:none;padding:1px 6px;border-radius:4px;font-size:11px;line-height:16px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.12));color:var(--dsw-alias-label-tertiary,#8a8a8a);white-space:nowrap}",
-      ".dsh-sh-badge[data-tone=ok]{color:var(--dsw-alias-state-success-primary,#4ade80);border-color:var(--dsw-alias-state-success-primary,rgba(74,222,128,.35))}",
-      ".dsh-sh-badge[data-tone=brand]{color:var(--dsw-alias-brand-primary,#818cf8);border-color:var(--dsw-alias-brand-primary,rgba(129,140,248,.35))}",
+      ".dsh-sh-body{flex:1;display:flex;min-height:0;overflow:hidden}",
 
-      // Installed list
+      ".dsh-sh-cats{width:150px;flex:none;overflow-y:auto;padding:10px 8px;",
+      "border-right:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
+      ".dsh-sh-cat{display:block;width:100%;box-sizing:border-box;appearance:none;border:none;background:transparent;",
+      "font:inherit;font-size:13px;text-align:left;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "padding:6px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".dsh-sh-cat:hover{color:var(--dsw-alias-label-primary,#fff);",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}",
+      ".dsh-sh-cat[data-active]{color:var(--dsw-alias-label-primary,#fff);font-weight:600;",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
+
+      ".dsh-sh-main{flex:1;min-width:0;overflow-y:auto;padding:12px 14px 24px}",
+
+      ".dsh-sh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}",
+      ".dsh-sh-card{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:12px;",
+      "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.04));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08));cursor:pointer;",
+      "transition:border-color .12s ease,background .12s ease}",
+      ".dsh-sh-card:hover{border-color:var(--dsw-alias-border-l2,rgba(255,255,255,.2));",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.07))}",
+      ".dsh-sh-card-head{display:flex;align-items:center;gap:8px;min-width:0}",
+      ".dsh-sh-avatar{width:26px;height:26px;flex:none;border-radius:7px;object-fit:cover;",
+      "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.08))}",
+      ".dsh-sh-avatar-fallback{width:26px;height:26px;flex:none;border-radius:7px;display:flex;",
+      "align-items:center;justify-content:center;font-size:12px;font-weight:600;",
+      "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.08));",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0)}",
+      ".dsh-sh-card-title{font-size:13px;font-weight:600;min-width:0;overflow:hidden;",
+      "text-overflow:ellipsis;white-space:nowrap;flex:1}",
+      ".dsh-sh-badge{flex:none;font-size:11px;padding:1px 7px;border-radius:999px;",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.07))}",
+      ".dsh-sh-badge[data-tone=installed]{color:var(--dsw-alias-state-success-primary,#8ec07c)}",
+      ".dsh-sh-badge[data-tone=verified]{color:var(--dsw-alias-brand-primary,#6366f1)}",
+      ".dsh-sh-card-desc{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.9em}",
+      ".dsh-sh-card-foot{display:flex;align-items:center;gap:8px;font-size:11px;",
+      "color:var(--dsw-alias-label-tertiary,#808080);margin-top:auto}",
+      ".dsh-sh-card-actions{display:flex;gap:6px;margin-left:auto}",
+
+      ".dsh-sh-btn{appearance:none;font:inherit;font-size:12px;padding:4px 11px;border-radius:7px;cursor:pointer;",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14));",
+      "background:var(--dsw-alias-button-elevated-fill,rgba(255,255,255,.07));",
+      "color:var(--dsw-alias-label-primary,#e0e0e0);white-space:nowrap}",
+      ".dsh-sh-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.12))}",
+      ".dsh-sh-btn[disabled]{opacity:.55;cursor:default}",
+      ".dsh-sh-btn[data-variant=primary]{border-color:transparent;font-weight:600;",
+      "background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary,#6366f1));",
+      "color:var(--dsw-alias-label-primary-foreground,#fff)}",
+      ".dsh-sh-btn[data-variant=danger]{color:var(--dsw-alias-state-error-primary,#FC7B6B)}",
+
       ".dsh-sh-list{display:flex;flex-direction:column;gap:8px}",
-      ".dsh-sh-row{display:flex;align-items:center;gap:12px;box-sizing:border-box;padding:10px 12px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-module-platform,rgba(128,128,128,0.08));min-width:0}",
-      ".dsh-sh-row-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}",
-      ".dsh-sh-row-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".dsh-sh-row-sub{font-size:12px;color:var(--dsw-alias-label-secondary,#a0a0a0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".dsh-sh-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;",
+      "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.04));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
+      ".dsh-sh-row-body{min-width:0;flex:1}",
+      ".dsh-sh-row-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".dsh-sh-row-desc{font-size:12px;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
 
-      // Detail
-      ".dsh-sh-detail{display:flex;flex-direction:column;gap:14px;max-width:900px}",
-      ".dsh-sh-detail-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}",
-      ".dsh-sh-detail-title{margin:0;font-size:18px;font-weight:600;min-width:0}",
-      ".dsh-sh-detail-sub{margin:0;font-size:12px;color:var(--dsw-alias-label-secondary,#a0a0a0)}",
-      ".dsh-sh-detail-meta{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8a8a)}",
-      ".dsh-sh-detail-tags{display:flex;gap:6px;flex-wrap:wrap}",
-      ".dsh-sh-section-title{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--dsw-alias-label-secondary,#a0a0a0)}",
-
-      // Rendered README
-      ".dsh-sh-md{border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-module-platform,rgba(128,128,128,0.06));padding:14px 16px;overflow-wrap:anywhere}",
-      ".dsh-sh-md h1,.dsh-sh-md h2,.dsh-sh-md h3{margin:16px 0 8px;line-height:1.3}",
-      ".dsh-sh-md h1:first-child,.dsh-sh-md h2:first-child,.dsh-sh-md h3:first-child{margin-top:0}",
-      ".dsh-sh-md h1{font-size:20px}.dsh-sh-md h2{font-size:17px}.dsh-sh-md h3{font-size:15px}",
-      ".dsh-sh-md p{margin:8px 0}",
-      ".dsh-sh-md ul{margin:8px 0;padding-left:22px}",
-      ".dsh-sh-md li{margin:3px 0}",
-      ".dsh-sh-md a{color:var(--dsw-alias-link,var(--dsw-alias-brand-primary,#818cf8));text-decoration:none}",
-      ".dsh-sh-md a:hover{text-decoration:underline}",
-      ".dsh-sh-md code{padding:1px 5px;border-radius:4px;background:var(--dsw-alias-markdown-code-block,rgba(128,128,128,0.18));font-size:12px;font-family:var(--dsh-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}",
-      ".dsh-sh-md pre{margin:10px 0;padding:12px;overflow-x:auto;border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-markdown-code-block,rgba(128,128,128,0.18))}",
+      ".dsh-sh-detail{display:flex;flex-direction:column;gap:14px;max-width:860px}",
+      ".dsh-sh-detail-head{display:flex;align-items:flex-start;gap:10px}",
+      ".dsh-sh-detail-title{margin:0;font-size:17px;font-weight:600}",
+      ".dsh-sh-detail-sub{font-size:12px;color:var(--dsw-alias-label-secondary,#a0a0a0);margin-top:3px}",
+      ".dsh-sh-meta{display:flex;flex-wrap:wrap;gap:8px 18px;padding:10px 12px;border-radius:10px;font-size:12px;",
+      "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.04));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
+      ".dsh-sh-meta-item{display:flex;gap:6px;align-items:baseline}",
+      ".dsh-sh-meta-key{color:var(--dsw-alias-label-tertiary,#808080)}",
+      ".dsh-sh-meta-value{color:var(--dsw-alias-label-primary,#e0e0e0)}",
+      ".dsh-sh-section-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;",
+      "color:var(--dsw-alias-label-tertiary,#808080);margin-bottom:6px}",
+      ".dsh-sh-md{font-size:13px;line-height:1.65;word-break:break-word}",
+      ".dsh-sh-md h1,.dsh-sh-md h2,.dsh-sh-md h3{margin:14px 0 6px;line-height:1.3}",
+      ".dsh-sh-md h1{font-size:17px}.dsh-sh-md h2{font-size:15px}.dsh-sh-md h3{font-size:14px}",
+      ".dsh-sh-md p{margin:6px 0}",
+      ".dsh-sh-md ul,.dsh-sh-md ol{margin:6px 0;padding-left:20px}",
+      ".dsh-sh-md li{margin:2px 0}",
+      ".dsh-sh-md code{font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:12px;padding:1px 5px;",
+      "border-radius:5px;background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.08))}",
+      ".dsh-sh-md pre{padding:10px 12px;border-radius:9px;overflow-x:auto;margin:8px 0;",
+      "background:var(--dsw-alias-markdown-code-block,rgba(0,0,0,.28))}",
       ".dsh-sh-md pre code{padding:0;background:transparent}",
-      ".dsh-sh-md blockquote{margin:10px 0;padding:2px 12px;border-left:3px solid var(--dsw-alias-border-l2,rgba(255,255,255,0.2));color:var(--dsw-alias-label-secondary,#a0a0a0)}",
-      ".dsh-sh-md hr{border:none;border-top:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));margin:14px 0}",
-      ".dsh-sh-md table{border-collapse:collapse;margin:10px 0;font-size:13px}",
-      ".dsh-sh-md td{border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,0.1));padding:5px 9px}",
-      ".dsh-sh-md img{max-width:100%;height:auto}",
+      ".dsh-sh-md a{color:var(--dsw-alias-link,var(--dsw-alias-brand-primary,#8ec07c))}",
+      ".dsh-sh-md blockquote{margin:8px 0;padding-left:10px;",
+      "border-left:3px solid var(--dsw-alias-border-l2,rgba(255,255,255,.2));",
+      "color:var(--dsw-alias-label-secondary,#a0a0a0)}",
+      ".dsh-sh-md table{border-collapse:collapse;margin:8px 0;font-size:12px}",
+      ".dsh-sh-md th,.dsh-sh-md td{border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.12));",
+      "padding:4px 8px;text-align:left}",
+      ".dsh-sh-md hr{border:none;height:1px;margin:12px 0;background:var(--dsw-alias-border-l1,rgba(255,255,255,.12))}",
 
-      // States
-      ".dsh-sh-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:48px 16px;color:var(--dsw-alias-label-tertiary,#8a8a8a);font-size:13px;text-align:center}",
-      ".dsh-sh-error{margin:0 0 12px;padding:8px 12px;border:1px solid var(--dsw-alias-state-error-primary,rgba(248,113,113,.4));border-radius:var(--dsw-radius-md,8px);color:var(--dsw-alias-state-error-primary,#f87171);font-size:12px}",
-      ".dsh-sh-spin{display:inline-block;width:14px;height:14px;border:2px solid var(--dsw-alias-border-l1,rgba(255,255,255,.2));border-top-color:var(--dsw-alias-brand-primary,#818cf8);border-radius:50%;animation:dsh-sh-spin .7s linear infinite}",
+      ".dsh-sh-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;",
+      "padding:48px 16px;color:var(--dsw-alias-label-tertiary,#808080);font-size:13px;text-align:center}",
+      ".dsh-sh-error{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:9px;font-size:12px;",
+      "margin-bottom:10px;color:var(--dsw-alias-state-warn-primary,#fabd2f);",
+      "background:var(--dsw-alias-bg-module-platform,rgba(255,255,255,.05));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
+
+      ".dsh-sh-spinner{width:16px;height:16px;border-radius:50%;",
+      "border:2px solid var(--dsw-alias-border-l1,rgba(255,255,255,.18));",
+      "border-top-color:var(--dsw-alias-brand-primary,#6366f1);animation:dsh-sh-spin .7s linear infinite}",
       "@keyframes dsh-sh-spin{to{transform:rotate(360deg)}}",
-      ".dsh-sh-loading{display:flex;align-items:center;gap:8px;padding:24px 0;color:var(--dsw-alias-label-tertiary,#8a8a8a);font-size:13px}",
 
-      // Toast
-      ".dsh-sh-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2147483000;padding:9px 16px;border-radius:var(--dsw-radius-md,8px);border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.12));background:var(--dsw-alias-toast-bg,rgba(40,40,40,.96));color:var(--dsw-alias-toast-label,var(--dsw-alias-label-primary,#e0e0e0));font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.35);pointer-events:none}",
-      ".dsh-sh-toast[data-tone=error]{border-color:var(--dsw-alias-state-error-primary,rgba(248,113,113,.5))}",
+      ".dsh-sh-toast{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;z-index:20;",
+      "padding:8px 16px;border-radius:9px;font-size:13px;max-width:80%;",
+      "background:var(--dsw-alias-toast-bg,rgba(20,20,20,.94));",
+      "color:var(--dsw-alias-toast-label,var(--dsw-alias-label-primary,#fff));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14));",
+      "box-shadow:0 8px 24px rgba(0,0,0,.28)}",
+      ".dsh-sh-toast[data-tone=error]{color:var(--dsw-alias-state-error-primary,#FC7B6B)}",
 
-      // Composer picker
-      ".dsh-sh-picker-wrap{position:relative;display:inline-flex}",
-      ".dsh-sh-picker{position:absolute;left:0;bottom:calc(100% + 6px);z-index:60;display:flex;flex-direction:column;width:260px;max-height:320px;box-sizing:border-box;overflow:hidden;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.12));border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-module-platform,#3c3836);box-shadow:0 12px 32px rgba(0,0,0,.35);color:var(--dsw-alias-label-primary,#e0e0e0)}",
-      ".dsh-sh-picker-head{flex:none;padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.08))}",
-      ".dsh-sh-picker-head input{box-sizing:border-box;width:100%;padding:5px 8px;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.12));border-radius:6px;background:var(--dsw-alias-bg-base,#282828);color:inherit;font:inherit;font-size:12px;outline:none}",
-      ".dsh-sh-picker-list{flex:1;min-height:0;overflow-y:auto;padding:4px}",
-      ".dsh-sh-picker-item{display:flex;flex-direction:column;gap:1px;box-sizing:border-box;width:100%;padding:6px 8px;border:none;border-radius:6px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}",
-      ".dsh-sh-picker-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.16))}",
-      ".dsh-sh-picker-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".dsh-sh-picker-desc{font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8a8a);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-    ].join("\n");
+      // composer chip
+      ".dsh-sh-composer-btn{appearance:none;font:inherit;font-size:12px;padding:4px 10px;border-radius:999px;",
+      "cursor:pointer;white-space:nowrap;color:var(--dsw-alias-label-secondary,#a0a0a0);",
+      "background:transparent;border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14))}",
+      ".dsh-sh-composer-btn:hover{color:var(--dsw-alias-label-primary,#fff);",
+      "background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.08))}",
+      ".dsh-sh-picker{position:absolute;bottom:100%;left:0;margin-bottom:6px;width:280px;max-height:300px;",
+      "overflow-y:auto;z-index:30;padding:6px;border-radius:11px;",
+      "background:var(--dsw-alias-bg-module-platform,rgba(40,40,40,.98));",
+      "border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.14));",
+      "box-shadow:0 14px 36px rgba(0,0,0,.32);color:var(--dsw-alias-label-primary,#e0e0e0)}",
+      ".dsh-sh-picker-item{display:block;width:100%;box-sizing:border-box;text-align:left;font:inherit;font-size:13px;",
+      "padding:7px 10px;border-radius:7px;cursor:pointer;border:none;background:transparent;",
+      "color:var(--dsw-alias-label-primary,#e0e0e0)}",
+      ".dsh-sh-picker-item:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.1))}",
+      ".dsh-sh-picker-empty{padding:10px;font-size:12px;",
+      "color:var(--dsw-alias-label-tertiary,#808080);text-align:center}",
+
+      "@media (max-width:720px){.dsh-sh-cats{display:none}}"
+    ].join("");
 
     function Styles() {
       return h("style", { "data-dsh-skill-hub": "" }, CSS);
     }
 
-    // ── Markdown (small, self-contained) ─────────────────────────────
+    // ── markdown ──────────────────────────────────────────────────────────
 
     function escapeHtml(text) {
-      return String(text)
+      return String(text == null ? "" : text)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
-    // A README is remote content. Escaping markup is not enough on its own:
-    // `[x](javascript:...)` would still produce a live script URL. Only allow
-    // schemes that cannot execute, plus in-page anchors and relative paths.
+    /**
+     * Allow only URLs that cannot execute script. A skill readme is remote
+     * content, so `javascript:` / `data:` and protocol-relative targets are
+     * dropped rather than rendered as links.
+     */
     function safeUrl(raw) {
-      var url = String(raw || "").trim();
-      if (!url) return "";
-      // Drop control characters, which browsers ignore when parsing a scheme.
-      url = url.replace(/[\u0000-\u001F\u007F]/g, "");
-      if (url.charAt(0) === "#") return url;
-      if (/^https?:\/\//i.test(url)) return url;
-      if (/^mailto:/i.test(url)) return url;
-      // Relative paths only: no scheme, no protocol-relative "//host".
-      if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return "";
-      if (url.slice(0, 2) === "//") return "";
-      return url;
+      var value = String(raw == null ? "" : raw)
+        .replace(/[\u0000-\u001F\u007F]/g, "")
+        .trim();
+      if (!value) return "";
+      if (value.startsWith("#")) return value;
+      if (/^https?:\/\//i.test(value)) return value;
+      if (/^mailto:/i.test(value)) return value;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return "";
+      if (value.startsWith("//")) return "";
+      return value;
     }
 
-    function renderMarkdown(md) {
-      if (!md) return "";
-      var lines = String(md).split("\n");
-      // Drop YAML frontmatter
-      if (lines[0] && lines[0].trim() === "---") {
-        for (var i = 1; i < lines.length; i++) {
-          if (lines[i].trim() === "---") { lines = lines.slice(i + 1); break; }
-        }
+    function renderInline(text) {
+      var out = String(text);
+      out = out.replace(/`([^`]+)`/g, function (_, code) {
+        return "<code>" + code + "</code>";
+      });
+      out = out.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, function (whole, label, href) {
+        var target = safeUrl(href);
+        if (!target) return label;
+        return '<a href="' + target + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+      });
+      out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      out = out.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+      return out;
+    }
+
+    /**
+     * A deliberately small markdown subset: headings, lists, quotes, fences,
+     * tables and paragraphs. Everything is escaped first, so no raw HTML from a
+     * remote readme can reach the DOM.
+     */
+    function renderMarkdown(markdown) {
+      var source = String(markdown || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      // Drop a leading frontmatter block; it is metadata, not prose.
+      if (source.startsWith("---")) {
+        var close = source.indexOf("\n---", 3);
+        if (close >= 0) source = source.slice(source.indexOf("\n", close + 1) + 1);
       }
-      var text = escapeHtml(lines.join("\n"));
 
-      text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function (m, lang, code) {
-        return "<pre><code>" + code.replace(/\n$/, "") + "</code></pre>";
-      });
-      text = text.replace(/`([^`\n]+)`/g, function (m, code) { return "<code>" + code + "</code>"; });
-      text = text.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-      text = text.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-      text = text.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
-      text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-      text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-      // `text` is already HTML-escaped above, so alt/label/href arrive escaped
-      // and must not be escaped a second time.
-      text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (m, alt, src) {
-        var safe = safeUrl(src);
-        if (!safe) return alt || "";
-        return '<img alt="' + alt + '" src="' + safe + '" />';
-      });
-      text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, label, href) {
-        var safe = safeUrl(href);
-        if (!safe) return label;
-        return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
-      });
-      text = text.replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>");
-      text = text.replace(/^---$/gm, "<hr/>");
+      var lines = escapeHtml(source).split("\n");
+      var html = [];
+      var listMode = "";
+      var inFence = false;
+      var fenceLines = [];
+      var paragraph = [];
 
-      // Tables: group consecutive rows, drop the separator row
-      text = text.replace(/(?:^\|.*\|$\n?)+/gm, function (block) {
-        var rows = block.trim().split("\n").map(function (row) {
-          return row.replace(/^\||\|$/g, "").split("|").map(function (c) { return c.trim(); });
-        }).filter(function (cells) {
-          return !cells.every(function (c) { return /^:?-{2,}:?$/.test(c); });
-        });
-        if (!rows.length) return "";
-        return "<table>" + rows.map(function (cells) {
-          return "<tr>" + cells.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>";
-        }).join("") + "</table>";
-      });
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        html.push("<p>" + renderInline(paragraph.join(" ")) + "</p>");
+        paragraph = [];
+      }
 
-      text = text.replace(/^(?:[*\-]\s+.+\n?)+/gm, function (block) {
-        var items = block.trim().split("\n").map(function (line) {
-          return "<li>" + line.replace(/^[*\-]\s+/, "") + "</li>";
-        });
-        return "<ul>" + items.join("") + "</ul>";
-      });
+      function closeList() {
+        if (!listMode) return;
+        html.push("</" + listMode + ">");
+        listMode = "";
+      }
 
-      text = text.split(/\n{2,}/).map(function (chunk) {
-        if (!chunk.trim()) return "";
-        if (/^<(h1|h2|h3|ul|ol|pre|table|blockquote|hr)/i.test(chunk.trim())) return chunk;
-        return "<p>" + chunk.replace(/\n/g, "<br/>") + "</p>";
-      }).join("\n");
+      for (var i = 0; i < lines.length; i += 1) {
+        var line = lines[i];
 
-      return text;
+        if (/^\s*```/.test(line)) {
+          if (inFence) {
+            html.push("<pre><code>" + fenceLines.join("\n") + "</code></pre>");
+            fenceLines = [];
+            inFence = false;
+          } else {
+            flushParagraph();
+            closeList();
+            inFence = true;
+          }
+          continue;
+        }
+
+        if (inFence) {
+          fenceLines.push(line);
+          continue;
+        }
+
+        if (!line.trim()) {
+          flushParagraph();
+          closeList();
+          continue;
+        }
+
+        var heading = /^(#{1,4})\s+(.*)$/.exec(line);
+        if (heading) {
+          flushParagraph();
+          closeList();
+          var level = heading[1].length;
+          html.push("<h" + level + ">" + renderInline(heading[2]) + "</h" + level + ">");
+          continue;
+        }
+
+        if (/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(line)) {
+          flushParagraph();
+          closeList();
+          html.push("<hr>");
+          continue;
+        }
+
+        var quote = /^\s*&gt;\s?(.*)$/.exec(line);
+        if (quote) {
+          flushParagraph();
+          closeList();
+          html.push("<blockquote>" + renderInline(quote[1]) + "</blockquote>");
+          continue;
+        }
+
+        var bullet = /^\s*[-*+]\s+(.*)$/.exec(line);
+        if (bullet) {
+          flushParagraph();
+          if (listMode !== "ul") {
+            closeList();
+            listMode = "ul";
+            html.push("<ul>");
+          }
+          html.push("<li>" + renderInline(bullet[1]) + "</li>");
+          continue;
+        }
+
+        var ordered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+        if (ordered) {
+          flushParagraph();
+          if (listMode !== "ol") {
+            closeList();
+            listMode = "ol";
+            html.push("<ol>");
+          }
+          html.push("<li>" + renderInline(ordered[1]) + "</li>");
+          continue;
+        }
+
+        if (line.includes("|") && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+          flushParagraph();
+          closeList();
+          var headers = line.split("|").map(function (cell) {
+            return cell.trim();
+          });
+          if (headers[0] === "") headers.shift();
+          if (headers[headers.length - 1] === "") headers.pop();
+
+          var rows = [];
+          var cursor = i + 2;
+          while (cursor < lines.length && lines[cursor].includes("|")) {
+            var cells = lines[cursor].split("|").map(function (cell) {
+              return cell.trim();
+            });
+            if (cells[0] === "") cells.shift();
+            if (cells[cells.length - 1] === "") cells.pop();
+            rows.push(cells);
+            cursor += 1;
+          }
+
+          var tableHtml = ["<table><thead><tr>"];
+          headers.forEach(function (cell) {
+            tableHtml.push("<th>" + renderInline(cell) + "</th>");
+          });
+          tableHtml.push("</tr></thead><tbody>");
+          rows.forEach(function (row) {
+            tableHtml.push("<tr>");
+            row.forEach(function (cell) {
+              tableHtml.push("<td>" + renderInline(cell) + "</td>");
+            });
+            tableHtml.push("</tr>");
+          });
+          tableHtml.push("</tbody></table>");
+          html.push(tableHtml.join(""));
+          i = cursor - 1;
+          continue;
+        }
+
+        paragraph.push(line);
+      }
+
+      if (inFence && fenceLines.length) {
+        html.push("<pre><code>" + fenceLines.join("\n") + "</code></pre>");
+      }
+      flushParagraph();
+      closeList();
+      return html.join("");
     }
 
-    // ── API helper ───────────────────────────────────────────────────
+    // ── api ───────────────────────────────────────────────────────────────
 
+    /**
+     * Thin RPC wrapper. Endpoints are named, never URL-built, and a rejected
+     * call surfaces the server's message instead of a generic failure.
+     */
     function makeApi(rpc) {
+      var call = function (endpoint, payload, signal) {
+        return rpc.call("/api/skill-hub/" + endpoint, payload || {}, signal).then(function (result) {
+          if (result && result.ok) return result.value;
+          var message = (result && result.error && result.error.message) || t("error.generic");
+          var error = new Error(message);
+          error.code = result && result.error && result.error.code;
+          throw error;
+        });
+      };
+
       return {
-        call: function (endpoint, payload) {
-          var controller = new AbortController();
-          return rpc.call("/api", endpoint, payload || {}, controller.signal).then(function (result) {
-            if (!result || !result.ok) {
-              var message = result && result.error && result.error.message;
-              throw new Error(message || t("err.request"));
-            }
-            return result.value;
-          });
+        sources: function (signal) {
+          return call("sources", {}, signal);
         },
+        categories: function (signal) {
+          return call("categories", {}, signal);
+        },
+        search: function (args, signal) {
+          return call("search", args, signal);
+        },
+        detail: function (args, signal) {
+          return call("detail", args, signal);
+        },
+        installed: function (signal) {
+          return call("installed", {}, signal);
+        },
+        install: function (args, signal) {
+          return call("install", args, signal);
+        },
+        uninstall: function (args, signal) {
+          return call("uninstall", args, signal);
+        }
       };
     }
 
-    // ── Small pieces ─────────────────────────────────────────────────
+    /** Build the server-side reference for an item. */
+    function refOf(skill) {
+      return {
+        source: skill.source,
+        slug: skill.slug,
+        owner: skill.owner,
+        repoRef: skill.repoRef,
+        repoPath: skill.repoPath
+      };
+    }
+
+    function sourceLabelOf(skill) {
+      if (!skill) return "";
+      return skill.sourceLabel || { skillhub: "SkillHub", clawhub: "ClawHub", github: "GitHub" }[skill.source] || skill.source || "";
+    }
+
+    function formatCount(value) {
+      var n = Number(value || 0);
+      if (!n) return "0";
+      if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+      if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+      return String(n);
+    }
+
+    function pickSummary(skill) {
+      return skill.summaryZh || skill.summary || "";
+    }
+
+    // ── small components ──────────────────────────────────────────────────
 
     function Spinner() {
-      return h("span", { className: "dsh-sh-spin", "aria-hidden": "true" });
+      return h("span", { className: "dsh-sh-spinner", "aria-hidden": "true" });
     }
 
-    function Toast(_a) {
-      var message = _a.message, tone = _a.tone;
-      if (!message) return null;
-      return h("div", { className: "dsh-sh-toast", "data-tone": tone || "info", role: "status" }, message);
-    }
-
-    function sourceLabel(source) {
-      if (source === "skillhub") return "SkillHub";
-      if (source === "clawhub") return "ClawHub";
-      if (source === "local") return t("src.local");
-      return source || "";
-    }
-
-    function formatCount(n) {
-      var value = Number(n);
-      if (!isFinite(value) || value <= 0) return "";
-      if (value >= 10000) return (value / 10000).toFixed(1).replace(/\.0$/, "") + " " + t("stat.wan");
-      return String(value);
-    }
-
-    function skillKey(skill) {
-      return (skill && (skill.slug || skill.name)) || "";
-    }
-
-    // ── Card ─────────────────────────────────────────────────────────
-
-    function SkillCard(_a) {
-      var item = _a.item, busy = _a.busy, onDetail = _a.onDetail, onInstall = _a.onInstall, onUninstall = _a.onUninstall;
-
-      var stats = [];
-      var downloads = formatCount(item.downloads || item.installs);
-      if (downloads) stats.push(t("stat.downloads", { n: downloads }));
-      var stars = formatCount(item.stars);
-      if (stars) stats.push(t("stat.stars", { n: stars }));
-      if (item.version) stats.push("v" + item.version);
-
-      return h("div", { className: "dsh-sh-card" },
-        h("div", { className: "dsh-sh-card-head" },
-          h("h3", { className: "dsh-sh-card-title", title: item.displayName || item.name || item.slug },
-            item.displayName || item.name || item.slug),
-          item.installed
-            ? h("span", { className: "dsh-sh-badge", "data-tone": "ok" }, t("badge.installed"))
-            : null
-        ),
-        item.summary || item.description
-          ? h("p", { className: "dsh-sh-card-desc" }, item.summary || item.description)
-          : null,
-        stats.length ? h("div", { className: "dsh-sh-card-stats" },
-          stats.map(function (s, i) { return h("span", { key: i }, s); }),
-          item.source ? h("span", { className: "dsh-sh-badge" }, sourceLabel(item.source)) : null
-        ) : null,
-        h("div", { className: "dsh-sh-card-actions" },
-          h("button", { className: "dsh-sh-btn", type: "button", onClick: function () { onDetail(item); } }, t("btn.detail")),
-          item.installed
-            ? h("button", {
-                className: "dsh-sh-btn", type: "button", "data-kind": "danger", disabled: busy,
-                onClick: function () { onUninstall(item); },
-              }, busy ? h(Spinner) : t("btn.uninstall"))
-            : h("button", {
-                className: "dsh-sh-btn", type: "button", "data-kind": "primary", disabled: busy,
-                onClick: function () { onInstall(item); },
-              }, busy ? h(Spinner) : t("btn.install"))
-        )
+    function StateBlock(props) {
+      return h(
+        "div",
+        { className: "dsh-sh-state" },
+        props.loading ? h(Spinner, null) : null,
+        h("div", null, props.text || "")
       );
     }
 
-    // ── Detail ───────────────────────────────────────────────────────
+    function Toast(props) {
+      var toast = props.toast || {};
+      if (!toast.message) return null;
+      return h("div", { className: "dsh-sh-toast", "data-tone": toast.tone || "info" }, toast.message);
+    }
 
-    function DetailView(_a) {
-      var detail = _a.detail, loading = _a.loading, busy = _a.busy, onBack = _a.onBack, onInstall = _a.onInstall, onUninstall = _a.onUninstall;
-
-      if (loading) {
-        return h("div", { className: "dsh-sh-loading" }, h(Spinner), t("state.loading"));
+    function Avatar(props) {
+      var skill = props.skill || {};
+      var label = (skill.name || skill.slug || "?").trim().charAt(0).toUpperCase();
+      if (skill.iconUrl) {
+        return h("img", {
+          className: "dsh-sh-avatar",
+          src: skill.iconUrl,
+          alt: "",
+          loading: "lazy",
+          referrerPolicy: "no-referrer",
+          onError: function (event) {
+            event.currentTarget.style.display = "none";
+          }
+        });
       }
-      if (!detail) {
-        return h("div", { className: "dsh-sh-empty" }, t("state.empty"));
-      }
+      return h("span", { className: "dsh-sh-avatar-fallback", "aria-hidden": "true" }, label);
+    }
 
-      var tags = Array.isArray(detail.tags) ? detail.tags : [];
+    function SkillCard(props) {
+      var skill = props.skill;
+      var busy = props.busy;
+      var onOpen = props.onOpen;
+      var onInstall = props.onInstall;
+      var onUninstall = props.onUninstall;
 
-      return h("div", { className: "dsh-sh-detail" },
-        h("div", null,
-          h("button", { className: "dsh-sh-btn", type: "button", onClick: onBack }, t("btn.back"))
+      return h(
+        "div",
+        {
+          className: "dsh-sh-card",
+          onClick: function () {
+            onOpen(skill);
+          }
+        },
+        h(
+          "div",
+          { className: "dsh-sh-card-head" },
+          h(Avatar, { skill: skill }),
+          h("span", { className: "dsh-sh-card-title", title: skill.name }, skill.name || skill.slug),
+          skill.installed ? h("span", { className: "dsh-sh-badge", "data-tone": "installed" }, t("action.installed")) : null
         ),
-        h("div", { className: "dsh-sh-detail-head" },
-          h("div", { style: { minWidth: 0, flex: "1 1 260px" } },
-            h("h2", { className: "dsh-sh-detail-title" }, detail.displayName || detail.name || detail.slug),
-            h("p", { className: "dsh-sh-detail-sub" }, detail.slug || ""),
-            detail.summary || detail.description
-              ? h("p", { className: "dsh-sh-detail-sub", style: { marginTop: 6 } }, detail.summary || detail.description)
-              : null
-          ),
-          h("div", { style: { display: "flex", gap: 8, alignItems: "center", flex: "none" } },
-            detail.installed
-              ? h("button", {
-                  className: "dsh-sh-btn", type: "button", "data-kind": "danger", disabled: busy,
-                  onClick: function () { onUninstall(detail); },
-                }, busy ? h(Spinner) : t("btn.uninstall"))
-              : h("button", {
-                  className: "dsh-sh-btn", type: "button", "data-kind": "primary", disabled: busy,
-                  onClick: function () { onInstall(detail); },
-                }, busy ? h(Spinner) : t("btn.install"))
+        h("div", { className: "dsh-sh-card-desc" }, pickSummary(skill) || "—"),
+        h(
+          "div",
+          { className: "dsh-sh-card-foot" },
+          h("span", null, sourceLabelOf(skill)),
+          skill.downloads ? h("span", null, "↓ " + formatCount(skill.downloads)) : null,
+          h(
+            "div",
+            { className: "dsh-sh-card-actions" },
+            skill.installed
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-sh-btn",
+                    "data-variant": "danger",
+                    disabled: busy,
+                    onClick: function (event) {
+                      event.stopPropagation();
+                      onUninstall(skill);
+                    }
+                  },
+                  busy ? t("loading") : t("action.uninstall")
+                )
+              : h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-sh-btn",
+                    "data-variant": "primary",
+                    disabled: busy,
+                    onClick: function (event) {
+                      event.stopPropagation();
+                      onInstall(skill);
+                    }
+                  },
+                  busy ? t("action.installing") : t("action.install")
+                )
           )
-        ),
-        h("div", { className: "dsh-sh-detail-meta" },
-          detail.source ? h("span", { className: "dsh-sh-badge" }, sourceLabel(detail.source)) : null,
-          detail.version ? h("span", null, t("meta.version", { v: detail.version })) : null,
-          formatCount(detail.downloads || detail.installs) ? h("span", null, t("stat.downloads", { n: formatCount(detail.downloads || detail.installs) })) : null,
-          formatCount(detail.stars) ? h("span", null, t("stat.stars", { n: formatCount(detail.stars) })) : null,
-          detail.author ? h("span", null, t("meta.author", { a: detail.author })) : null,
-          detail.installed ? h("span", { className: "dsh-sh-badge", "data-tone": "ok" }, t("badge.installed")) : null
-        ),
-        tags.length
-          ? h("div", { className: "dsh-sh-detail-tags" },
-              tags.map(function (tag, i) { return h("span", { key: i, className: "dsh-sh-badge", "data-tone": "brand" }, String(tag)); }))
-          : null,
-        h("div", null,
-          h("h3", { className: "dsh-sh-section-title" }, t("section.readme")),
-          detail.readme
-            ? h("div", { className: "dsh-sh-md", dangerouslySetInnerHTML: { __html: renderMarkdown(detail.readme) } })
-            : h("div", { className: "dsh-sh-empty" }, t("state.noReadme"))
         )
       );
     }
 
-    // ── Page (the `main` seat) ───────────────────────────────────────
+    function DetailView(props) {
+      var detail = props.detail || {};
+      var busy = props.busy;
+      var onBack = props.onBack;
+      var onInstall = props.onInstall;
+      var onUninstall = props.onUninstall;
+
+      var metaItems = []
+      if (detail.version) metaItems.push([t("detail.version"), detail.version])
+      if (detail.ownerName || detail.owner) metaItems.push([t("detail.author"), detail.ownerName || detail.owner])
+      if (detail.category) metaItems.push([t("detail.category"), detail.category])
+      if (detail.license) metaItems.push([t("detail.license"), detail.license])
+      if (detail.downloadCount) metaItems.push([t("detail.downloads"), formatCount(detail.downloadCount)])
+      if (detail.stars) metaItems.push([t("detail.stars"), formatCount(detail.stars)])
+      metaItems.push([t("detail.source"), sourceLabelOf(detail)])
+
+      return h(
+        "div",
+        { className: "dsh-sh-detail" },
+        h(
+          "div",
+          { className: "dsh-sh-detail-head" },
+          h(
+            "button",
+            { type: "button", className: "dsh-sh-btn", onClick: onBack },
+            "← " + t("action.back")
+          ),
+          h(
+            "div",
+            { style: { flex: 1, minWidth: 0 } },
+            h("h2", { className: "dsh-sh-detail-title" }, detail.name || detail.slug),
+            h("div", { className: "dsh-sh-detail-sub" }, pickSummary(detail) || detail.slug)
+          ),
+          detail.installed
+            ? h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-btn",
+                  "data-variant": "danger",
+                  disabled: busy,
+                  onClick: function () {
+                    onUninstall(detail);
+                  }
+                },
+                busy ? t("loading") : t("action.uninstall")
+              )
+            : h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-btn",
+                  "data-variant": "primary",
+                  disabled: busy,
+                  onClick: function () {
+                    onInstall(detail);
+                  }
+                },
+                busy ? t("action.installing") : t("action.install")
+              )
+        ),
+        metaItems.length
+          ? h(
+              "div",
+              { className: "dsh-sh-meta" },
+              metaItems.map(function (pair, index) {
+                return h(
+                  "div",
+                  { className: "dsh-sh-meta-item", key: index },
+                  h("span", { className: "dsh-sh-meta-key" }, pair[0]),
+                  h("span", { className: "dsh-sh-meta-value" }, String(pair[1]))
+                );
+              })
+            )
+          : null,
+        detail.tags && detail.tags.length
+          ? h(
+              "div",
+              { className: "dsh-sh-meta" },
+              detail.tags.slice(0, 12).map(function (tag, index) {
+                return h("span", { className: "dsh-sh-badge", key: index }, String(tag));
+              })
+            )
+          : null,
+        h(
+          "div",
+          null,
+          h("div", { className: "dsh-sh-section-title" }, t("detail.readme")),
+          detail.readme
+            ? h("div", {
+                className: "dsh-sh-md",
+                dangerouslySetInnerHTML: { __html: renderMarkdown(detail.readme) }
+              })
+            : h("div", { className: "dsh-sh-state" }, detail.readmeError || t("detail.readmeEmpty"))
+        )
+      );
+    }
+
+    // ── main page ─────────────────────────────────────────────────────────
 
     function SkillHubPage(props) {
       var rpc = props.rpc;
-      var apiRef = useRef(null);
-      if (!apiRef.current) apiRef.current = makeApi(rpc);
-      var api = apiRef.current;
+      var api = useMemo(
+        function () {
+          return makeApi(rpc);
+        },
+        [rpc]
+      );
 
-      var _tab = useState("market"), tab = _tab[0], setTab = _tab[1];
-      var _kw = useState(""), keyword = _kw[0], setKeyword = _kw[1];
-      var _src = useState(""), source = _src[0], setSource = _src[1];
-      var _cat = useState(""), category = _cat[0], setCategory = _cat[1];
+      var tabState = useState("market");
+      var tab = tabState[0];
+      var setTab = tabState[1];
 
-      var _items = useState([]), items = _items[0], setItems = _items[1];
-      var _loading = useState(false), loading = _loading[0], setLoading = _loading[1];
-      var _error = useState(""), error = _error[0], setError = _error[1];
+      var keywordState = useState("");
+      var keyword = keywordState[0];
+      var setKeyword = keywordState[1];
 
-      var _cats = useState([]), categories = _cats[0], setCategories = _cats[1];
+      var sourceState = useState("");
+      var activeSource = sourceState[0];
+      var setActiveSource = sourceState[1];
 
-      var _installed = useState([]), installed = _installed[0], setInstalled = _installed[1];
-      var _installedLoading = useState(false), installedLoading = _installedLoading[0], setInstalledLoading = _installedLoading[1];
+      var categoryState = useState("");
+      var activeCategory = categoryState[0];
+      var setActiveCategory = categoryState[1];
 
-      var _detail = useState(null), detail = _detail[0], setDetail = _detail[1];
-      var _detailLoading = useState(false), detailLoading = _detailLoading[0], setDetailLoading = _detailLoading[1];
+      var sourcesState = useState([]);
+      var sources = sourcesState[0];
+      var setSources = sourcesState[1];
 
-      var _busy = useState({}), busy = _busy[0], setBusy = _busy[1];
-      var _toast = useState(null), toast = _toast[0], setToast = _toast[1];
+      var categoriesState = useState([]);
+      var categories = categoriesState[0];
+      var setCategories = categoriesState[1];
 
-      var toastTimer = useRef(0);
-      var showToast = function (message, tone) {
+      var itemsState = useState([]);
+      var items = itemsState[0];
+      var setItems = itemsState[1];
+
+      var pageState = useState(1);
+      var page = pageState[0];
+      var setPage = pageState[1];
+
+      var hasMoreState = useState(false);
+      var hasMore = hasMoreState[0];
+      var setHasMore = hasMoreState[1];
+
+      var loadingState = useState(true);
+      var loading = loadingState[0];
+      var setLoading = loadingState[1];
+
+      var errorState = useState("");
+      var error = errorState[0];
+      var setError = errorState[1];
+
+      var sourceErrorsState = useState([]);
+      var sourceErrors = sourceErrorsState[0];
+      var setSourceErrors = sourceErrorsState[1];
+
+      var detailState = useState(null);
+      var detail = detailState[0];
+      var setDetail = detailState[1];
+
+      var installedState = useState(null);
+      var installed = installedState[0];
+      var setInstalled = installedState[1];
+
+      var busyState = useState({});
+      var busy = busyState[0];
+      var setBusy = busyState[1];
+
+      var toastState = useState({});
+      var toast = toastState[0];
+      var setToast = toastState[1];
+
+      var requestRef = useRef(0);
+      var toastTimer = useRef(null);
+
+      var showToast = useCallback(function (message, tone) {
         setToast({ message: message, tone: tone || "info" });
-        if (toastTimer.current) window.clearTimeout(toastTimer.current);
-        toastTimer.current = window.setTimeout(function () { setToast(null); }, 2600);
-      };
-      useEffect(function () {
-        return function () { if (toastTimer.current) window.clearTimeout(toastTimer.current); };
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(function () {
+          setToast({});
+        }, 3200);
       }, []);
 
+      useEffect(
+        function () {
+          return function () {
+            if (toastTimer.current) clearTimeout(toastTimer.current);
+          };
+        },
+        []
+      );
+
+      // Static reference data: fetched once, independently of the search loop.
+      useEffect(
+        function () {
+          var controller = new AbortController();
+          api
+            .sources(controller.signal)
+            .then(function (value) {
+              setSources((value && value.sources) || []);
+            })
+            .catch(function () {
+              setSources([]);
+            });
+          api
+            .categories(controller.signal)
+            .then(function (value) {
+              setCategories((value && value.categories) || []);
+            })
+            .catch(function () {
+              setCategories([]);
+            });
+          return function () {
+            controller.abort();
+          };
+        },
+        [api]
+      );
+
+      var runSearch = useCallback(
+        function (nextPage, append) {
+          var token = requestRef.current + 1;
+          requestRef.current = token;
+
+          setLoading(true);
+          setError("");
+
+          var args = {
+            keyword: keyword,
+            page: nextPage,
+            pageSize: 30,
+            source: activeSource || undefined,
+            category: activeCategory || undefined
+          };
+
+          return api
+            .search(args)
+            .then(function (value) {
+              if (requestRef.current !== token) return;
+              var incoming = (value && value.items) || [];
+              setItems(function (previous) {
+                if (!append) return incoming;
+                var seen = new Set(
+                  previous.map(function (skill) {
+                    return skill.id;
+                  })
+                );
+                return previous.concat(
+                  incoming.filter(function (skill) {
+                    return !seen.has(skill.id);
+                  })
+                );
+              });
+              setHasMore(!!(value && value.hasMore));
+              setPage(nextPage);
+              setSourceErrors((value && value.errors) || []);
+            })
+            .catch(function (failure) {
+              if (requestRef.current !== token) return;
+              setError((failure && failure.message) || t("error.generic"));
+              if (!append) setItems([]);
+              setHasMore(false);
+            })
+            .finally(function () {
+              if (requestRef.current === token) setLoading(false);
+            });
+        },
+        [api, keyword, activeSource, activeCategory]
+      );
+
+      // Debounce typing; switch a filter and the search fires immediately.
+      useEffect(
+        function () {
+          if (tab !== "market") return undefined;
+          var timer = setTimeout(function () {
+            runSearch(1, false);
+          }, keyword ? 260 : 0);
+          return function () {
+            clearTimeout(timer);
+          };
+        },
+        [tab, keyword, activeSource, activeCategory, runSearch]
+      );
+
+      // The installed list is only fetched when its tab is actually opened.
+      var loadInstalled = useCallback(
+        function () {
+          setLoading(true);
+          setError("");
+          return api
+            .installed()
+            .then(function (value) {
+              setInstalled(value || { skills: [], dir: "" });
+            })
+            .catch(function (failure) {
+              setError((failure && failure.message) || t("error.generic"));
+              setInstalled({ skills: [], dir: "" });
+            })
+            .finally(function () {
+              setLoading(false);
+            });
+        },
+        [api]
+      );
+
+      useEffect(
+        function () {
+          if (tab !== "installed") return;
+          loadInstalled();
+        },
+        [tab, loadInstalled]
+      );
+
       var markBusy = function (key, value) {
-        setBusy(function (prev) {
-          var next = Object.assign({}, prev);
-          if (value) next[key] = true;
-          else delete next[key];
+        setBusy(function (previous) {
+          var next = {};
+          Object.keys(previous).forEach(function (name) {
+            next[name] = previous[name];
+          });
+          next[key] = value;
           return next;
         });
       };
 
-      var applyInstalledFlags = function (list, installedNames) {
-        var names = installedNames || {};
-        return list.map(function (item) {
-          var key = skillKey(item);
-          return Object.assign({}, item, { installed: !!names[String(key).toLowerCase()] || !!item.installed });
-        });
-      };
+      var handleInstall = useCallback(
+        function (skill) {
+          var key = "install:" + skill.id;
+          markBusy(key, true);
+          api
+            .install(refOf(skill))
+            .then(function (value) {
+              showToast(t("toast.installed", { name: (value && value.name) || skill.name || skill.slug }), "info");
+              setItems(function (previous) {
+                return previous.map(function (item) {
+                  return item.id === skill.id ? { ...item, installed: true } : item;
+                });
+              });
+              setDetail(function (previous) {
+                return previous && previous.id === skill.id ? { ...previous, installed: true } : previous;
+              });
+              setInstalled(null);
+            })
+            .catch(function (failure) {
+              showToast(t("toast.failed", { message: (failure && failure.message) || "" }), "error");
+            })
+            .finally(function () {
+              markBusy(key, false);
+            });
+        },
+        [api, showToast]
+      );
 
-      var loadInstalled = function () {
-        setInstalledLoading(true);
-        return api.call("skill-hub/installed", {})
-          .then(function (value) {
-            var list = (value && value.skills) || [];
-            setInstalled(list);
-            var names = {};
-            list.forEach(function (s) { names[String(skillKey(s)).toLowerCase()] = true; });
-            setItems(function (prev) { return applyInstalledFlags(prev, names); });
-            return names;
-          })
-          .catch(function (e) { setError(e.message || String(e)); return null; })
-          .then(function (names) { setInstalledLoading(false); return names; });
-      };
+      var handleUninstall = useCallback(
+        function (skill) {
+          var key = "uninstall:" + skill.id;
+          markBusy(key, true);
+          api
+            .uninstall({ slug: skill.slug })
+            .then(function () {
+              showToast(t("toast.uninstalled", { name: skill.name || skill.slug }), "info");
+              setItems(function (previous) {
+                return previous.map(function (item) {
+                  return item.id === skill.id ? { ...item, installed: false } : item;
+                });
+              });
+              setDetail(function (previous) {
+                return previous && previous.id === skill.id ? { ...previous, installed: false } : previous;
+              });
+              if (tab === "installed") loadInstalled();
+            })
+            .catch(function (failure) {
+              showToast(t("toast.failed", { message: (failure && failure.message) || "" }), "error");
+            })
+            .finally(function () {
+              markBusy(key, false);
+            });
+        },
+        [api, showToast, tab, loadInstalled]
+      );
 
-      var search = function (next) {
-        var q = next || {};
-        var kw = q.keyword !== undefined ? q.keyword : keyword;
-        var src = q.source !== undefined ? q.source : source;
-        var cat = q.category !== undefined ? q.category : category;
-
-        setLoading(true);
-        setError("");
-        var payload = { keyword: kw, page: 1, pageSize: 60 };
-        if (src) payload.source = src;
-        if (cat) payload.category = cat;
-
-        api.call("skill-hub/search", payload)
-          .then(function (value) {
-            var list = (value && value.items) || [];
-            setItems(list);
-            var failed = (value && value.errors) || [];
-            if (!list.length && failed.length) {
-              setError(failed.map(function (f) { return f.source + ": " + f.error; }).join("；"));
-            }
-            loadInstalled();
-          })
-          .catch(function (e) { setError(e.message || String(e)); setItems([]); })
-          .then(function () { setLoading(false); });
-      };
-
-      // Initial load: categories + first page + installed list.
-      useEffect(function () {
-        var cancelled = false;
-        api.call("skill-hub/categories", {})
-          .then(function (value) {
-            if (cancelled) return;
-            var list = (value && value.categories) || [];
-            setCategories(Array.isArray(list) ? list : []);
-          })
-          .catch(function () { /* categories are optional */ });
-        search({ keyword: "", category: "" });
-        return function () { cancelled = true; };
-      }, []);
-
-      var refreshInstalledTab = function () {
-        if (tab === "installed") loadInstalled();
-      };
-      useEffect(function () {
-        if (tab === "installed") loadInstalled();
-      }, [tab]);
-
-      var openDetail = function (skill) {
-        setDetailLoading(true);
-        setDetail(null);
-        var payload = { slug: skill.slug || skill.name };
-        if (skill.source) payload.source = skill.source;
-        if (skill.ownerHandle) payload.ownerHandle = skill.ownerHandle;
-        api.call("skill-hub/detail", payload)
-          .then(function (value) { setDetail(value || null); })
-          .catch(function (e) { showToast(t("err.detail", { e: e.message || e }), "error"); })
-          .then(function () { setDetailLoading(false); });
-      };
-
-      var doInstall = function (skill) {
-        var key = skillKey(skill);
-        markBusy(key, true);
-        var payload = { slug: key };
-        if (skill.source) payload.source = skill.source;
-        if (skill.ownerHandle) payload.ownerHandle = skill.ownerHandle;
-        api.call("skill-hub/install", payload)
-          .then(function () {
-            showToast(t("toast.installed", { name: key }), "success");
-            setItems(function (prev) {
-              return prev.map(function (it) {
-                return skillKey(it) === key ? Object.assign({}, it, { installed: true }) : it;
+      var openDetail = useCallback(
+        function (skill) {
+          setDetail({ id: skill.id, name: skill.name, slug: skill.slug, source: skill.source, installed: skill.installed, loading: true });
+          // Seed from the card so the header renders instantly, then replace.
+          api
+            .detail(refOf(skill))
+            .then(function (value) {
+              setDetail({ ...(value || {}), id: skill.id, loading: false });
+            })
+            .catch(function (failure) {
+              setDetail({
+                id: skill.id,
+                name: skill.name,
+                slug: skill.slug,
+                source: skill.source,
+                loading: false,
+                readmeError: (failure && failure.message) || t("error.generic")
               });
             });
-            if (detail && skillKey(detail) === key) setDetail(Object.assign({}, detail, { installed: true }));
-            loadInstalled();
-          })
-          .catch(function (e) { showToast(t("err.install", { e: e.message || e }), "error"); })
-          .then(function () { markBusy(key, false); });
+        },
+        [api]
+      );
+
+      var isBusy = function (skill, verb) {
+        return !!(skill && busy[verb + ":" + skill.id]);
       };
 
-      var doUninstall = function (skill) {
-        var key = skillKey(skill);
-        if (!window.confirm(t("confirm.uninstall", { name: skill.displayName || skill.name || key }))) return;
-        markBusy(key, true);
-        api.call("skill-hub/uninstall", { slug: key })
-          .then(function () {
-            showToast(t("toast.uninstalled", { name: key }), "success");
-            setItems(function (prev) {
-              return prev.map(function (it) {
-                return skillKey(it) === key ? Object.assign({}, it, { installed: false }) : it;
-              });
-            });
-            if (detail && skillKey(detail) === key) setDetail(Object.assign({}, detail, { installed: false }));
-            loadInstalled();
-          })
-          .catch(function (e) { showToast(t("err.uninstall", { e: e.message || e }), "error"); })
-          .then(function () { markBusy(key, false); });
-      };
+      var showCategories = tab === "market" && (!activeSource || activeSource === "skillhub");
+      var visibleCategories = categories.filter(function (entry) {
+        return !!entry.key;
+      });
 
-      var renderMarket = function () {
-        if (loading && !items.length) return h("div", { className: "dsh-sh-loading" }, h(Spinner), t("state.searching"));
-        if (!items.length) {
-          return h("div", { className: "dsh-sh-empty" }, t("state.noResults"));
+      var marketBody;
+      if (detail) {
+        if (detail.loading) {
+          marketBody = h(StateBlock, { loading: true, text: t("loading") });
+        } else {
+          marketBody = h(DetailView, {
+            detail: detail,
+            busy: isBusy(detail, "install") || isBusy(detail, "uninstall"),
+            onBack: function () {
+              setDetail(null);
+            },
+            onInstall: handleInstall,
+            onUninstall: handleUninstall
+          });
         }
-        return h("div", { className: "dsh-sh-grid" },
-          items.map(function (item) {
-            var key = skillKey(item);
-            return h(SkillCard, {
-              key: item.source + ":" + key,
-              item: item,
-              busy: !!busy[key],
-              onDetail: openDetail,
-              onInstall: doInstall,
-              onUninstall: doUninstall,
-            });
-          })
+      } else if (loading && !items.length) {
+        marketBody = h(StateBlock, { loading: true, text: t("loading") });
+      } else if (error && !items.length) {
+        marketBody = h(
+          "div",
+          { className: "dsh-sh-state" },
+          h("div", null, error),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "dsh-sh-btn",
+              onClick: function () {
+                runSearch(1, false);
+              }
+            },
+            t("action.retry")
+          )
         );
-      };
+      } else if (!items.length) {
+        marketBody = h(
+          "div",
+          { className: "dsh-sh-state" },
+          h("div", null, t("empty.market")),
+          h("div", null, t("empty.hint"))
+        );
+      } else {
+        marketBody = h(
+          "div",
+          { className: "dsh-sh-list" },
+          h(
+            "div",
+            { className: "dsh-sh-grid" },
+            items.map(function (skill) {
+              return h(SkillCard, {
+                key: skill.id,
+                skill: skill,
+                busy: isBusy(skill, "install") || isBusy(skill, "uninstall"),
+                onOpen: openDetail,
+                onInstall: handleInstall,
+                onUninstall: handleUninstall
+              });
+            })
+          ),
+          hasMore
+            ? h(
+                "div",
+                { style: { display: "flex", justifyContent: "center", marginTop: 12 } },
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-sh-btn",
+                    disabled: loading,
+                    onClick: function () {
+                      runSearch(page + 1, true);
+                    }
+                  },
+                  loading ? t("loading") : t("action.loadMore")
+                )
+              )
+            : null
+        );
+      }
 
-      var renderInstalled = function () {
-        if (installedLoading && !installed.length) return h("div", { className: "dsh-sh-loading" }, h(Spinner), t("state.loading"));
-        if (!installed.length) return h("div", { className: "dsh-sh-empty" }, t("state.noInstalled"));
-        return h("div", { className: "dsh-sh-list" },
-          installed.map(function (skill) {
-            var key = skillKey(skill);
-            return h("div", { className: "dsh-sh-row", key: key },
-              h("div", { className: "dsh-sh-row-main" },
-                h("span", { className: "dsh-sh-row-title" }, skill.displayName || skill.name || key),
-                h("span", { className: "dsh-sh-row-sub" }, skill.summary || skill.description || "—")
+      var installedList = (installed && installed.skills) || [];
+      var installedBody;
+      if (installed === null || (loading && !installedList.length)) {
+        installedBody = h(StateBlock, { loading: true, text: t("loading") });
+      } else if (!installedList.length) {
+        installedBody = h("div", { className: "dsh-sh-state" }, h("div", null, t("empty.installed")));
+      } else {
+        installedBody = h(
+          "div",
+          { className: "dsh-sh-list" },
+          installed && installed.dir
+            ? h(
+                "div",
+                { className: "dsh-sh-detail-sub" },
+                t("installed.dir") + " · " + installed.dir
+              )
+            : null,
+          installedList.map(function (skill) {
+            return h(
+              "div",
+              { className: "dsh-sh-row", key: skill.slug },
+              h(Avatar, { skill: skill }),
+              h(
+                "div",
+                { className: "dsh-sh-row-body" },
+                h("div", { className: "dsh-sh-row-title" }, skill.name || skill.slug),
+                h("div", { className: "dsh-sh-row-desc" }, pickSummary(skill) || skill.sourceLabel || "")
               ),
-              skill.sourceLabel ? h("span", { className: "dsh-sh-badge" }, skill.sourceLabel) : null,
-              skill.version ? h("span", { className: "dsh-sh-badge" }, "v" + skill.version) : null,
-              h("button", { className: "dsh-sh-btn", type: "button", onClick: function () { openDetail(skill); } }, t("btn.detail")),
-              h("button", {
-                className: "dsh-sh-btn", type: "button", "data-kind": "danger", disabled: !!busy[key],
-                onClick: function () { doUninstall(skill); },
-              }, busy[key] ? h(Spinner) : t("btn.uninstall"))
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-btn",
+                  "data-variant": "danger",
+                  disabled: !!busy["uninstall:" + skill.slug],
+                  onClick: function () {
+                    handleUninstall({ ...skill, id: skill.slug });
+                  }
+                },
+                busy["uninstall:" + skill.slug] ? t("loading") : t("action.uninstall")
+              )
             );
           })
         );
-      };
-
-      var body;
-      if (detail || detailLoading) {
-        body = h(DetailView, {
-          detail: detail, loading: detailLoading, busy: detail ? !!busy[skillKey(detail)] : false,
-          onBack: function () { setDetail(null); setDetailLoading(false); },
-          onInstall: doInstall, onUninstall: doUninstall,
-        });
-      } else if (tab === "installed") {
-        body = renderInstalled();
-      } else {
-        body = renderMarket();
       }
 
-      return h("div", { className: "dsh-sh-root", "data-dsh-skill-hub-page": "" },
-        h(Styles),
-        h("div", { className: "dsh-sh-head" },
-          h("h1", { className: "dsh-sh-title" }, t("page.title")),
-          h("div", { className: "dsh-sh-search" },
-            h("input", {
-              value: keyword,
-              placeholder: t("page.searchPlaceholder"),
-              onChange: function (e) { setKeyword(e.target.value); },
-              onKeyDown: function (e) { if (e.key === "Enter") search({ keyword: e.target.value }); },
-            })
+      return h(
+        "div",
+        { className: "dsh-sh-page", style: { position: "relative" } },
+        h(Styles, null),
+        h(
+          "div",
+          { className: "dsh-sh-top" },
+          h(
+            "div",
+            { className: "dsh-sh-title-row" },
+            h("h1", { className: "dsh-sh-heading" }, t("panel.title")),
+            h(
+              "div",
+              { className: "dsh-sh-tabs", role: "tablist" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-tab",
+                  role: "tab",
+                  "data-active": tab === "market" ? "" : undefined,
+                  onClick: function () {
+                    setTab("market");
+                    setDetail(null);
+                  }
+                },
+                t("tab.market")
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dsh-sh-tab",
+                  role: "tab",
+                  "data-active": tab === "installed" ? "" : undefined,
+                  onClick: function () {
+                    setTab("installed");
+                    setDetail(null);
+                  }
+                },
+                t("tab.installed")
+              )
+            )
           ),
-          h("select", {
-            className: "dsh-sh-src", value: source,
-            onChange: function (e) { setSource(e.target.value); search({ source: e.target.value }); },
-            title: t("page.sourceTitle"),
-          },
-            h("option", { value: "" }, t("src.all")),
-            h("option", { value: "skillhub" }, "SkillHub"),
-            h("option", { value: "clawhub" }, "ClawHub")
-          )
+          tab === "market"
+            ? h(
+                "div",
+                { className: "dsh-sh-search-row" },
+                h(
+                  "div",
+                  { className: "dsh-sh-search" },
+                  h("input", {
+                    className: "dsh-sh-search-input",
+                    type: "search",
+                    value: keyword,
+                    placeholder: t("search.placeholder"),
+                    onChange: function (event) {
+                      setKeyword(event.target.value);
+                      setDetail(null);
+                    }
+                  }),
+                  keyword
+                    ? h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "dsh-sh-search-clear",
+                          title: t("search.clear"),
+                          onClick: function () {
+                            setKeyword("");
+                          }
+                        },
+                        "×"
+                      )
+                    : null
+                ),
+                h(
+                  "div",
+                  { className: "dsh-sh-sources" },
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "dsh-sh-chip",
+                      "data-active": !activeSource ? "" : undefined,
+                      onClick: function () {
+                        setActiveSource("");
+                        setDetail(null);
+                      }
+                    },
+                    t("source.all")
+                  ),
+                  sources.map(function (source) {
+                    return h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "dsh-sh-chip",
+                        key: source.id,
+                        "data-active": activeSource === source.id ? "" : undefined,
+                        onClick: function () {
+                          setActiveSource(source.id);
+                          setDetail(null);
+                        }
+                      },
+                      source.label || source.id
+                    );
+                  })
+                )
+              )
+            : null
         ),
-        h("div", { className: "dsh-sh-tabs" },
-          h("button", {
-            className: "dsh-sh-tab", type: "button", "data-active": tab === "market" ? "" : undefined,
-            onClick: function () { setTab("market"); setDetail(null); },
-          }, t("tab.market")),
-          h("button", {
-            className: "dsh-sh-tab", type: "button", "data-active": tab === "installed" ? "" : undefined,
-            onClick: function () { setTab("installed"); setDetail(null); },
-          }, t("tab.installed"))
-        ),
-        h("div", { className: "dsh-sh-body" },
-          tab === "market" && !detail && !detailLoading && categories.length
-            ? h("div", { className: "dsh-sh-rail" },
-                h("button", {
-                  type: "button", "data-active": category === "" ? "" : undefined,
-                  onClick: function () { setCategory(""); search({ category: "" }); },
-                }, t("cat.all")),
-                categories.map(function (cat, i) {
-                  var id = cat.id || cat.slug || cat.key || cat.name || String(i);
-                  var name = cat.name || cat.displayName || cat.label || id;
-                  return h("button", {
-                    key: id, type: "button", title: name,
-                    "data-active": category === id ? "" : undefined,
-                    onClick: function () { setCategory(id); search({ category: id }); },
-                  }, name);
+        h(
+          "div",
+          { className: "dsh-sh-body" },
+          showCategories
+            ? h(
+                "aside",
+                { className: "dsh-sh-cats" },
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dsh-sh-cat",
+                    "data-active": !activeCategory ? "" : undefined,
+                    onClick: function () {
+                      setActiveCategory("");
+                      setDetail(null);
+                    }
+                  },
+                  t("category.all")
+                ),
+                visibleCategories.map(function (entry) {
+                  return h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "dsh-sh-cat",
+                      key: entry.key,
+                      "data-active": activeCategory === entry.key ? "" : undefined,
+                      title: entry.nameEn || entry.name,
+                      onClick: function () {
+                        setActiveCategory(entry.key);
+                        setDetail(null);
+                      }
+                    },
+                    entry.name || entry.key
+                  );
                 })
               )
             : null,
-          h("div", { className: "dsh-sh-content" },
-            error ? h("div", { className: "dsh-sh-error" }, error) : null,
-            body
+          h(
+            "div",
+            { className: "dsh-sh-main" },
+            sourceErrors.length
+              ? h(
+                  "div",
+                  { className: "dsh-sh-error" },
+                  t("error.partial") +
+                    " · " +
+                    sourceErrors
+                      .map(function (entry) {
+                        return entry.source + ": " + entry.error;
+                      })
+                      .join("; ")
+                )
+              : null,
+            tab === "market" ? marketBody : installedBody
           )
         ),
-        toast ? h(Toast, { message: toast.message, tone: toast.tone }) : null
+        h(Toast, { toast: toast })
       );
     }
 
-    // ── Sidebar row glyph (the `sidebar.panellist` seat) ─────────────
+    // ── sidebar glyph ─────────────────────────────────────────────────────
 
+    /** The shell passes { size, active }; draw at that size in currentColor. */
     function SkillHubIcon(props) {
-      var size = (props && typeof props.size === "number" && props.size > 0) ? props.size : 16;
-      return h("svg", {
-        viewBox: "0 0 16 16",
-        width: size,
-        height: size,
-        fill: "none",
-        stroke: "currentColor",
-        strokeWidth: "1.4",
-        strokeLinecap: "round",
-        strokeLinejoin: "round",
-        "aria-hidden": "true",
-        focusable: "false",
-        style: { display: "block" },
-      }, h("path", { d: "M9.2 1.6 3.4 9h4l-1.1 5.4L12.6 7h-4l.6-5.4Z" }));
+      var size = (props && props.size) || 16;
+      return h(
+        "svg",
+        {
+          viewBox: "0 0 16 16",
+          width: size,
+          height: size,
+          fill: "none",
+          stroke: "currentColor",
+          strokeWidth: "1.3",
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+          "aria-hidden": "true",
+          focusable: "false",
+          style: { display: "block" }
+        },
+        h("path", { d: "M9 1.5L3 9h4.5l-1 5.5L13 7H8.5l.5-5.5z" })
+      );
     }
 
-    // ── Composer picker (the `conversation.input.left` seat) ─────────
+    // ── composer chip ─────────────────────────────────────────────────────
 
     function ChatInputButton(props) {
       var rpc = props.rpc;
       var inputActions = props.inputActions;
-      var apiRef = useRef(null);
-      if (!apiRef.current) apiRef.current = makeApi(rpc);
+      var openState = useState(false);
+      var open = openState[0];
+      var setOpen = openState[1];
+      var skillsState = useState([]);
+      var skills = skillsState[0];
+      var setSkills = skillsState[1];
+      var containerRef = useRef(null);
 
-      var _open = useState(false), open = _open[0], setOpen = _open[1];
-      var _list = useState([]), list = _list[0], setList = _list[1];
-      var _loading = useState(false), loading = _loading[0], setLoading = _loading[1];
-      var _kw = useState(""), keyword = _kw[0], setKeyword = _kw[1];
-      var wrapRef = useRef(null);
+      var api = useMemo(
+        function () {
+          return makeApi(rpc);
+        },
+        [rpc]
+      );
 
-      var load = function () {
-        setLoading(true);
-        apiRef.current.call("skill-hub/installed", {})
-          .then(function (value) { setList((value && value.skills) || []); })
-          .catch(function () { setList([]); })
-          .then(function () { setLoading(false); });
-      };
+      useEffect(
+        function () {
+          if (!open) return undefined;
+          var controller = new AbortController();
+          api
+            .installed(controller.signal)
+            .then(function (value) {
+              setSkills((value && value.skills) || []);
+            })
+            .catch(function () {
+              setSkills([]);
+            });
+          return function () {
+            controller.abort();
+          };
+        },
+        [open, api]
+      );
 
-      var toggle = function () {
-        if (!open) load();
-        setOpen(!open);
-      };
+      useEffect(
+        function () {
+          if (!open) return undefined;
+          var onPointerDown = function (event) {
+            if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false);
+          };
+          document.addEventListener("pointerdown", onPointerDown);
+          return function () {
+            document.removeEventListener("pointerdown", onPointerDown);
+          };
+        },
+        [open]
+      );
 
-      useEffect(function () {
-        if (!open) return;
-        var onDown = function (e) {
-          if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-        };
-        var onKey = function (e) { if (e.key === "Escape") setOpen(false); };
-        document.addEventListener("mousedown", onDown);
-        document.addEventListener("keydown", onKey);
-        return function () {
-          document.removeEventListener("mousedown", onDown);
-          document.removeEventListener("keydown", onKey);
-        };
-      }, [open]);
-
-      var pick = function (skill) {
+      var insertSkill = function (skill) {
         var name = skill.slug || skill.name;
         if (inputActions && typeof inputActions.setDraft === "function") {
           inputActions.setDraft("/" + name + " ");
-        } else {
-          window.dispatchEvent(new CustomEvent("dsh-skill-hub-insert", { detail: { skill: name } }));
         }
         setOpen(false);
-        setKeyword("");
       };
 
-      var slugOf = function (s) { return (s && (s.slug || s.name)) || ""; };
-
-      var q = keyword.trim().toLowerCase();
-      var filtered = q
-        ? list.filter(function (s) {
-            return String(slugOf(s)).toLowerCase().indexOf(q) >= 0 ||
-              String(s.displayName || s.name || "").toLowerCase().indexOf(q) >= 0;
-          })
-        : list;
-
-      return h("div", { className: "dsh-sh-picker-wrap", ref: wrapRef },
-        h(Styles),
-        h("button", {
-          className: "dsh-sh-btn", type: "button", onClick: toggle, title: t("picker.title"),
-          "aria-expanded": open ? "true" : "false",
-        }, h(SkillHubIcon, { size: 13 }), t("picker.button")),
+      return h(
+        "div",
+        { ref: containerRef, style: { position: "relative", display: "inline-flex" } },
+        h(Styles, null),
+        h(
+          "button",
+          {
+            type: "button",
+            className: "dsh-sh-composer-btn",
+            title: t("composer.hint"),
+            onClick: function () {
+              setOpen(!open);
+            }
+          },
+          t("composer.button")
+        ),
         open
-          ? h("div", { className: "dsh-sh-picker" },
-              h("div", { className: "dsh-sh-picker-head" },
-                h("input", {
-                  autoFocus: true, value: keyword, placeholder: t("picker.filter"),
-                  onChange: function (e) { setKeyword(e.target.value); },
-                })
-              ),
-              h("div", { className: "dsh-sh-picker-list" },
-                loading
-                  ? h("div", { className: "dsh-sh-loading" }, h(Spinner), t("state.loading"))
-                  : !filtered.length
-                    ? h("div", { className: "dsh-sh-empty" }, list.length ? t("picker.noMatch") : t("picker.empty"))
-                    : filtered.map(function (skill) {
-                        var key = slugOf(skill);
-                        return h("button", {
-                          key: key, className: "dsh-sh-picker-item", type: "button",
-                          onClick: function () { pick(skill); },
-                        },
-                          h("span", { className: "dsh-sh-picker-name" }, skill.displayName || skill.name || key),
-                          h("span", { className: "dsh-sh-picker-desc" }, skill.summary || skill.description || key)
-                        );
-                      })
-              )
+          ? h(
+              "div",
+              { className: "dsh-sh-picker" },
+              skills.length
+                ? skills.map(function (skill) {
+                    return h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "dsh-sh-picker-item",
+                        key: skill.slug,
+                        onClick: function () {
+                          insertSkill(skill);
+                        }
+                      },
+                      skill.name || skill.slug
+                    );
+                  })
+                : h("div", { className: "dsh-sh-picker-empty" }, t("empty.installed"))
             )
           : null
       );
     }
 
-    // ── Entry ────────────────────────────────────────────────────────
+    // ── plugin entry ──────────────────────────────────────────────────────
 
     var inject = ["slots", "connection"];
 
+    var PANEL_ID = "skill-hub";
+
     function apply(ctx) {
+      bindLocale(ctx);
+
       var rpc = ctx.get("connection").rpc;
 
-      // Visible text goes through the host's locale service. `ctx.locale` is
-      // only reachable through `ctx.get`, and the service is optional, so the
-      // built-in table above keeps working if it is absent.
-      ctx.effect(function () {
-        try {
-          var locale = typeof ctx.get === "function" ? ctx.get("locale") : undefined;
-          if (locale && typeof locale.register === "function") {
-            locale.register(NS, DICT);
-            if (typeof locale.bind === "function") {
-              var bound = locale.bind(NS);
-              if (typeof bound === "function") t = bound;
-            }
-          }
-        } catch (e) { /* no locale service: keep the built-in table */ }
-        return function () {};
-      }, "dsh-skill-hub: locale");
-
-      // The sidebar row. The shell draws it: geometry, indent, label colour,
-      // hover, collapsed rail, active highlight and the panel switch.
       ctx.effect(function () {
         return ctx.slots.inject("sidebar.panellist", function () {
-          return ctx.slots.register({
-            name: "sidebar.panellist",
-            id: PANEL_ID,
-            order: PANEL_ORDER,
-            label: function () { return t("page.title"); },
-          }, SkillHubIcon);
+          return ctx.slots.register(
+            {
+              name: "sidebar.panellist",
+              id: PANEL_ID,
+              order: -1,
+              label: function () {
+                return t("panel.title");
+              }
+            },
+            SkillHubIcon
+          );
         });
       }, "dsh-skill-hub: sidebar row");
 
-      // The centre-column page that row switches to.
       ctx.effect(function () {
         return ctx.slots.inject("main", function () {
-          return ctx.slots.register({
-            name: "main",
-            key: PANEL_ID,
-            inject: function () { return { rpc: rpc }; },
-          }, SkillHubPage);
+          return ctx.slots.register(
+            {
+              name: "main",
+              key: PANEL_ID,
+              inject: function () {
+                return { rpc: rpc };
+              }
+            },
+            SkillHubPage
+          );
         });
       }, "dsh-skill-hub: main page");
 
-      // Convenience picker next to the composer.
       ctx.effect(function () {
         return ctx.slots.inject("conversation.input.left", function () {
-          return ctx.slots.register({
-            name: "conversation.input.left",
-            id: PANEL_ID,
-            order: INPUT_ORDER,
-            inject: function () { return { rpc: rpc }; },
-          }, ChatInputButton);
+          return ctx.slots.register(
+            {
+              name: "conversation.input.left",
+              id: PANEL_ID,
+              order: 100,
+              inject: function () {
+                return { rpc: rpc };
+              }
+            },
+            ChatInputButton
+          );
         });
-      }, "dsh-skill-hub: composer picker");
+      }, "dsh-skill-hub: composer chip");
     }
 
     exports.apply = apply;
     exports.inject = inject;
     return module.exports;
-  },
+  }
 });

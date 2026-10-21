@@ -2,22 +2,24 @@
 //
 //   node test/verify.mjs
 //
-// Runs without network and without a browser. It checks the parts that are
-// checkable in isolation:
+// No network, no browser. It covers everything that is checkable in isolation:
 //
-//   1. both halves parse as ES modules;
-//   2. the client half loads through the same `window.__ModuleLoader__` shim
-//      the DSH web shell uses, and claims exactly three documented seats;
+//   1. both halves parse, and the client half loads through the same
+//      `window.__ModuleLoader__` shim the DSH web shell uses;
+//   2. the client claims exactly the three documented seats and never touches
+//      the DOM outside its own components;
 //   3. the sidebar glyph honours the `size` prop the shell passes;
-//   4. the host half registers exactly the seven documented RPC routes, POST
-//      only, and answers GET → 404 / bad body → 400 before touching the network;
-//   5. the markdown renderer escapes HTML, produces balanced tags, and drops
-//      executable URLs (a README is remote content);
-//   6. a traversing `slug` cannot escape the skills directory — install and
-//      uninstall build a path from it and then rmSync recursively.
+//   4. the host registers exactly the seven documented RPC routes, POST only,
+//      and answers GET → 404 / bad body → 400 before touching the network;
+//   5. categories degrade to the built-in Chinese catalogue when the upstream
+//      endpoint is unreachable;
+//   6. a search asks every source concurrently, so one dead registry yields a
+//      partial result plus an entry in `errors` instead of a failed request;
+//   7. the markdown renderer escapes HTML, balances its tags and drops
+//      executable URLs (a readme is remote content);
+//   8. a traversing `slug` cannot escape the skills directory.
 //
-// Visual behaviour (row alignment, theme colours) is verified by installing the
-// bundle into DSH — see the README.
+// Visual behaviour (alignment, theme colours) needs the bundle installed in DSH.
 
 import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,30 +58,19 @@ const React = {
   },
   useMemo(fn) {
     return fn();
-  },
+  }
 };
 
 const loads = [];
 globalThis.window = {
   __ModuleLoader__: { load: (mod) => loads.push(mod) },
   setTimeout: () => 0,
-  clearTimeout: () => {},
-  confirm: () => true,
-  dispatchEvent: () => true,
+  clearTimeout: () => {}
+};
+globalThis.document = {
+  documentElement: { lang: "zh-CN" },
   addEventListener: () => {},
-  removeEventListener: () => {},
-};
-globalThis.document = { addEventListener: () => {}, removeEventListener: () => {} };
-globalThis.AbortController = class {
-  constructor() {
-    this.signal = {};
-  }
-};
-globalThis.CustomEvent = class {
-  constructor(type, init) {
-    this.type = type;
-    this.detail = init && init.detail;
-  }
+  removeEventListener: () => {}
 };
 
 eval(clientSource);
@@ -111,10 +102,10 @@ const slots = {
   register(options, Component) {
     registrations.push({ options, Component });
     return () => {};
-  },
+  }
 };
 
-const rpc = { call: async () => ({ ok: true, value: { items: [], skills: [], categories: [] } }) };
+const rpc = { call: async () => ({ ok: true, value: { items: [], skills: [], categories: [], sources: [] } }) };
 const ctx = {
   slots,
   get(name) {
@@ -124,7 +115,7 @@ const ctx = {
   effect(fn, label) {
     effects.push(label);
     return fn();
-  },
+  }
 };
 
 client.apply(ctx);
@@ -142,6 +133,27 @@ check("sidebar row carries an id", typeof sidebarOptions.id === "string" && side
 check("sidebar row carries an order", typeof sidebarOptions.order === "number");
 check("sidebar row label is a thunk", typeof sidebarOptions.label === "function");
 check("main page key matches the sidebar id", mainOptions.key === sidebarOptions.id);
+
+// The whole point of the rewrite: no DOM surgery outside our own tree.
+for (const banned of [
+  "document.body",
+  "appendChild",
+  "insertBefore",
+  "querySelector",
+  "MutationObserver",
+  "favicon",
+  "mountBrand"
+]) {
+  check(`client never uses ${banned}`, !clientSource.includes(banned));
+}
+
+// Every colour must come from a theme token so the panel follows the active skin.
+const hardcodedColours = (clientSource.match(/(?:^|[\s:(])(?:#[0-9a-fA-F]{3,8})\b/g) || []).filter(Boolean);
+check(
+  "client styles with theme tokens, not literal colours",
+  hardcodedColours.length === 0,
+  hardcodedColours.slice(0, 4).join(", ")
+);
 
 // ── 3. Sidebar glyph ─────────────────────────────────────────────────
 
@@ -164,40 +176,154 @@ const routes = [];
 // Point the skills root at a scratch directory: the uninstall route below really
 // does rmSync when a slug passes validation, and it must never reach ~/.dsh.
 const scratchSkills = mkdtempSync(join(tmpdir(), "dsh-skill-hub-test-"));
-host.apply({ connection: { fetch: { register: (spec) => routes.push(spec) } }, skills: {} }, { localSkillsDir: scratchSkills });
+host.apply(
+  { connection: { fetch: { register: (spec) => routes.push(spec) } }, skills: {} },
+  { localSkillsDir: scratchSkills }
+);
 
 const expectedPaths = [
   "/api/skill-hub/categories",
   "/api/skill-hub/detail",
   "/api/skill-hub/install",
   "/api/skill-hub/installed",
-  "/api/skill-hub/readme",
   "/api/skill-hub/search",
-  "/api/skill-hub/uninstall",
+  "/api/skill-hub/sources",
+  "/api/skill-hub/uninstall"
 ];
 const actualPaths = routes.map((r) => r.path).sort();
 check("seven RPC routes", JSON.stringify(actualPaths) === JSON.stringify(expectedPaths), JSON.stringify(actualPaths));
 check("all routes POST only", routes.every((r) => JSON.stringify(r.methods) === JSON.stringify(["POST"])));
 check("all routes have a fetch handler", routes.every((r) => typeof r.fetch === "function"));
 
-const search = routes.find((r) => r.path === "/api/skill-hub/search");
-const getResponse = await search.fetch(new Request("http://x/api/skill-hub/search", { method: "GET" }));
+const routeOf = (name) => routes.find((r) => r.path === `/api/skill-hub/${name}`);
+
+const callRoute = async (name, payload) => {
+  const res = await routeOf(name).fetch(
+    new Request("http://x", { method: "POST", body: JSON.stringify({ rpcId: "t", payload: { args: payload } }) })
+  );
+  return res.json();
+};
+
+const searchRoute = routeOf("search");
+const getResponse = await searchRoute.fetch(new Request("http://x/api/skill-hub/search", { method: "GET" }));
 check("GET rejected with 404", getResponse.status === 404, String(getResponse.status));
 
-const badBody = await search.fetch(
+const badBody = await searchRoute.fetch(
   new Request("http://x/api/skill-hub/search", { method: "POST", body: "not json" })
 );
 check("malformed body rejected with 400", badBody.status === 400, String(badBody.status));
 
-// ── 5. Markdown renderer ─────────────────────────────────────────────
+// ── 5. Categories fall back to the built-in Chinese catalogue ─────────
+
+const realFetch = globalThis.fetch;
+globalThis.fetch = async () => {
+  throw new Error("offline");
+};
+
+const categoriesOut = await callRoute("categories", {});
+check("categories route still succeeds offline", categoriesOut.result?.ok === true);
+const categoryList = categoriesOut.result?.value?.categories || [];
+check("categories include an 'all' head", categoryList[0]?.key === "" && categoryList[0]?.name === "全部");
+check("categories fall back to 13 built-ins", categoryList.length === 14, String(categoryList.length));
+check(
+  "built-in categories are Chinese",
+  categoryList.some((entry) => entry.key === "dev-programming" && entry.name === "开发编程"),
+  JSON.stringify(categoryList.slice(1, 3))
+);
+
+// ── 6. A degraded source must not fail the search ────────────────────
+//
+// SkillHub answers, ClawHub throws, GitHub answers through jsDelivr. The
+// request must resolve, keep the two healthy sources, and report the failure.
+
+globalThis.fetch = async (url) => {
+  const target = String(url);
+
+  if (target.includes("api.skillhub.tencent.com/api/skills")) {
+    return new Response(
+      JSON.stringify({
+        code: 0,
+        data: {
+          total: 1,
+          skills: [
+            {
+              slug: "pdf",
+              name: "PDF 工具",
+              description: "work with pdf",
+              description_zh: "处理 PDF 文件",
+              downloads: 5000,
+              stars: 12,
+              verified: true,
+              category: "office-efficiency",
+              tags: ["pdf"],
+              ownerName: "u_1",
+              version: "1.0.0"
+            }
+          ]
+        }
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  if (target.includes("clawhub.ai")) {
+    throw new Error("clawhub is unreachable");
+  }
+
+  if (target.includes("data.jsdelivr.com")) {
+    return new Response(
+      JSON.stringify({
+        files: [
+          { name: "/skills/pdf/SKILL.md" },
+          { name: "/skills/pdf/helper.md" },
+          { name: "/README.md" }
+        ]
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  throw new Error(`unexpected fetch: ${target}`);
+};
+
+const searchOut = await callRoute("search", { keyword: "", pageSize: 30 });
+check("search resolves even with a dead source", searchOut.result?.ok === true, JSON.stringify(searchOut.result?.error));
+
+const searchValue = searchOut.result?.value || {};
+const foundSources = new Set((searchValue.items || []).map((item) => item.source));
+check("SkillHub items survive", foundSources.has("skillhub"), JSON.stringify([...foundSources]));
+check("GitHub items survive", foundSources.has("github"), JSON.stringify([...foundSources]));
+check(
+  "the dead source is reported, not hidden",
+  (searchValue.errors || []).some((entry) => entry.source === "clawhub"),
+  JSON.stringify(searchValue.errors)
+);
+
+const githubItem = (searchValue.items || []).find((item) => item.source === "github");
+check("GitHub item carries the fields install needs", !!githubItem && !!githubItem.owner && !!githubItem.repoPath && !!githubItem.repoRef, JSON.stringify(githubItem));
+check("GitHub install slug is a single safe segment", !!githubItem && !/[\\/]/.test(githubItem.slug), githubItem?.slug);
+check(
+  "Chinese summary is preferred when present",
+  (searchValue.items || []).some((item) => item.summaryZh === "处理 PDF 文件")
+);
+
+const sourcesOut = await callRoute("sources", {});
+check("sources route lists three catalogues", (sourcesOut.result?.value?.sources || []).length === 3);
+check(
+  "SkillHub is the only category-aware source",
+  (sourcesOut.result?.value?.sources || []).filter((entry) => entry.supportsCategory).map((entry) => entry.id).join(",") ===
+    "skillhub"
+);
+
+globalThis.fetch = realFetch;
+
+// ── 7. Markdown renderer ─────────────────────────────────────────────
 
 const mdStart = clientSource.indexOf("function escapeHtml");
-const mdEnd = clientSource.indexOf("    // ── API helper");
+const mdEnd = clientSource.indexOf("    // ── api");
 check("markdown block located", mdStart > 0 && mdEnd > mdStart);
 
-const renderMarkdown = new Function(
-  clientSource.slice(mdStart, mdEnd) + "\nreturn renderMarkdown;"
-)();
+const renderMarkdown = new Function(clientSource.slice(mdStart, mdEnd) + "\nreturn renderMarkdown;")();
 
 const sample = [
   "---",
@@ -223,7 +349,7 @@ const sample = [
   "| --- | --- |",
   "| `--a` | 甲 |",
   "",
-  "---",
+  "---"
 ].join("\n");
 
 const html = renderMarkdown(sample);
@@ -238,7 +364,7 @@ check("list", html.includes("<ul>") && html.includes("<li>第一条</li>"));
 check("blockquote", html.includes("<blockquote>"));
 check("table", html.includes("<table>") && html.includes("<td><code>--a</code></td>"));
 check("table separator dropped", !html.includes("<td>---</td>"));
-check("horizontal rule", html.includes("<hr/>"));
+check("horizontal rule", html.includes("<hr>"));
 
 for (const tag of ["p", "ul", "li", "table", "tr", "td", "pre", "code", "strong", "em", "h1", "blockquote"]) {
   const open = (html.match(new RegExp(`<${tag}[\\s>]`, "g")) || []).length;
@@ -249,13 +375,13 @@ for (const tag of ["p", "ul", "li", "table", "tr", "td", "pre", "code", "strong"
 const hostile = renderMarkdown('<script>alert(1)</script> & "q"');
 check("html escaped", !hostile.includes("<script>") && hostile.includes("&lt;script&gt;"));
 
-// A README is remote content, so an executable URL must not survive as a link.
+// A readme is remote content, so an executable URL must not survive as a link.
 for (const bad of [
   "[x](javascript:alert(1))",
   "[x](JaVaScRiPt:alert(1))",
   "[x](data:text/html;base64,PHNjcmlwdD4=)",
   "[x](vbscript:msgbox)",
-  "![i](javascript:alert(1))",
+  "![i](javascript:alert(1))"
 ]) {
   const out = renderMarkdown(bad);
   check(`drops unsafe url: ${bad}`, !/javascript:|vbscript:|data:/i.test(out), out);
@@ -264,36 +390,35 @@ check("keeps https links", /href="https:\/\/example\.com"/.test(renderMarkdown("
 check("keeps relative links", /href="\.\/docs\/a\.md"/.test(renderMarkdown("[a](./docs/a.md)")));
 check("keeps anchors", /href="#install"/.test(renderMarkdown("[a](#install)")));
 
-// ── 4b. Path containment ─────────────────────────────────────────────
+// ── 8. Path containment ──────────────────────────────────────────────
 //
 // install/uninstall build a directory from `slug` and then rmSync it, and the
 // slug comes from the RPC payload and the remote catalogue. A traversing value
 // would let a request delete anything the host can reach, so exercise the guard
 // through the public route rather than trusting inspection.
 
-const install = routes.find((r) => r.path === "/api/skill-hub/install");
-const uninstall = routes.find((r) => r.path === "/api/skill-hub/uninstall");
-
-const callRoute = async (route, payload) => {
-  const res = await route.fetch(
-    new Request("http://x", { method: "POST", body: JSON.stringify({ rpcId: "t", payload: { args: payload } }) })
-  );
-  return res.json();
-};
-
 for (const evil of ["..", ".", "../escape", "..\\escape", "a/b", "a\\b", "C:evil", "", "   "]) {
-  const out = await callRoute(uninstall, { slug: evil });
+  const out = await callRoute("uninstall", { slug: evil });
   check(`uninstall rejects slug ${JSON.stringify(evil)}`, out.result?.ok === false, JSON.stringify(out.result));
 }
 
 // A well-formed slug must still reach the normal path (and here fail only
 // because nothing is installed), proving the guard is not a blanket refusal.
-const normal = await callRoute(uninstall, { slug: "some-real-skill" });
+const normal = await callRoute("uninstall", { slug: "some-real-skill" });
 check(
   "uninstall still handles a normal slug",
-  normal.result?.ok === false && /not installed/i.test(normal.result.error.message),
+  normal.result?.ok === false && /尚未安装|not installed/i.test(normal.result.error.message),
   JSON.stringify(normal.result)
 );
+
+const installEvil = await callRoute("install", { source: "skillhub", slug: "../escape" });
+check("install rejects a traversing slug", installEvil.result?.ok === false, JSON.stringify(installEvil.result));
+
+const installNoSource = await callRoute("install", { slug: "pdf" });
+check("install requires a source", installNoSource.result?.ok === false, JSON.stringify(installNoSource.result));
+
+const detailNoSource = await callRoute("detail", { slug: "pdf" });
+check("detail requires a source", detailNoSource.result?.ok === false, JSON.stringify(detailNoSource.result));
 
 // ── Result ───────────────────────────────────────────────────────────
 

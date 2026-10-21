@@ -1,8 +1,8 @@
 # dsh-skill-hub
 
-A skill hub for **DeepSeek Harness**: search two public skill registries in one
-place, read a skill's README before installing it, and install / uninstall it
-into `$DSH_HOME/skills`.
+A skill hub for **DeepSeek Harness**: search several public skill registries in
+one place, read a skill's README before installing it, and install / uninstall
+it into `$DSH_HOME/skills`.
 
 It ships as a first-class DSH panel — the sidebar row, the centre-column page and
 the composer picker are all contributed through the shell's own slot contracts,
@@ -11,9 +11,21 @@ by DSH and follow whichever theme is active.
 
 ## What it does
 
-- **One search box, two registries** — SkillHub (`api.skillhub.tencent.com`,
-  fast in mainland China) and ClawHub (`clawhub.ai`). Results are merged and
-  de-duplicated by slug, with installed skills pinned first.
+- **One search box, several registries** — queried in parallel, merged, and
+  de-duplicated by slug, with installed skills pinned first:
+  - **SkillHub** (`api.skillhub.tencent.com`) — fast in mainland China, ~21k
+    skills, Chinese summaries and category filters.
+  - **ClawHub** (`clawhub.ai`) — the OpenClaw registry.
+  - **GitHub skill repos** — any repo laid out as `<dir>/SKILL.md`. Four ship by
+    default (`anthropics/skills`, `obra/superpowers`,
+    `rohitg00/awesome-claude-code-toolkit`, `ComposioHQ/awesome-claude-skills`),
+    and `githubRepos` accepts any list of your own.
+- **Chinese first** — SkillHub's `description_zh` and Chinese skill names are
+  preferred when present, and the category list is shown in Chinese. The UI
+  itself is localised (中文 / English, following DSH's locale).
+- **Fast by default** — sources are fetched concurrently rather than in
+  sequence, a slow registry can no longer stall the whole search, and a short
+  timeout plus a warm cache keep repeat searches instant.
 - **Read before you install** — a skill's `SKILL.md` / `README.md` is rendered
   in place, so you can see what it actually does.
 - **Install / uninstall** — downloads the skill archive and unpacks it into
@@ -70,8 +82,19 @@ the DSH plugin settings:
 | --- | --- | --- |
 | `skillhubApiBase` | `https://api.skillhub.tencent.com` | SkillHub endpoint |
 | `clawhubApiBase` | `https://clawhub.ai` | ClawHub endpoint (`clawhub.com` just 307s here) |
+| `githubRepos` | four repos, comma-separated | `owner/repo@ref` entries to search; order is priority for duplicate skill names |
+| `githubApiBase` | `https://api.github.com` | Used to list each repo's file tree |
+| `githubRawBase` | `https://raw.githubusercontent.com` | Used to fetch `SKILL.md` and skill files |
+| `githubToken` | `''` | Optional GitHub token; raises the 60-requests/hour anonymous limit |
+| `jsdelivrDataApi` | `https://data.jsdelivr.com` | Fallback tree listing when GitHub's quota is exhausted |
+| `jsdelivrCdn` | `https://cdn.jsdelivr.net` | Fallback file host when raw.githubusercontent is unreachable |
 | `localSkillsDir` | `''` | Where to install; empty means `$DSH_HOME/skills` |
-| `preferSkillHub` | `true` | Which registry is queried first when both are enabled |
+| `enableSkillHub` | `true` | Turn the SkillHub source on or off |
+| `enableClawHub` | `true` | Turn the ClawHub source on or off |
+| `enableGitHub` | `true` | Turn the GitHub source on or off |
+| `sourceTimeoutMs` | `8000` | Per-source budget before it is reported as slow and skipped |
+| `downloadTimeoutMs` | `60000` | Budget for downloading a skill archive |
+| `cacheTtlMs` | `600000` | How long tree listings and detail responses stay warm |
 
 ## RPC surface
 
@@ -80,13 +103,14 @@ blanket `/api` interceptor, so the official API gateway keeps working):
 
 | Endpoint | Purpose |
 | --- | --- |
-| `skill-hub/search` | merged search across both registries |
+| `skill-hub/sources` | which registries are enabled, with labels |
+| `skill-hub/search` | merged, parallel search across every enabled source |
 | `skill-hub/detail` | skill detail + README |
 | `skill-hub/installed` | installed skills (registry ∪ filesystem) |
 | `skill-hub/install` | download + unpack into the skills directory |
 | `skill-hub/uninstall` | remove an installed skill |
 | `skill-hub/readme` | read a local `README.md` / `SKILL.md` |
-| `skill-hub/categories` | SkillHub category list |
+| `skill-hub/categories` | category list, in Chinese |
 
 ## Layout
 
