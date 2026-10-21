@@ -21,7 +21,7 @@
 //
 // Visual behaviour (alignment, theme colours) needs the bundle installed in DSH.
 
-import { readFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -313,6 +313,123 @@ check(
   "SkillHub is the only category-aware source",
   (sourcesOut.result?.value?.sources || []).filter((entry) => entry.supportsCategory).map((entry) => entry.id).join(",") ===
     "skillhub"
+);
+
+// ── 6b. De-duplication across catalogues ─────────────────────────────
+//
+// The catalogues overlap heavily: SkillHub imports most of its rows from
+// ClawHub, so the same skill routinely appears two or three times under
+// different publishers. The index must collapse those into one row without
+// collapsing two unrelated skills that merely share a generic slug.
+
+const skillhubRow = (over) => ({
+  slug: "agent-browser",
+  name: "Agent Browser",
+  description: "drive a browser",
+  description_zh: "驱动浏览器",
+  downloads: 100,
+  ownerName: "u_1",
+  namespace: { canonicalName: "@clawhub_rez0/agent-browser" },
+  upstream_url: "https://clawhub.ai/rez0/agent-browser",
+  ...over
+});
+
+globalThis.fetch = async (url) => {
+  const target = String(url);
+
+  if (target.includes("api.skillhub.tencent.com/api/skills")) {
+    return new Response(
+      JSON.stringify({
+        code: 0,
+        data: {
+          total: 4,
+          skills: [
+            // Two publishers mirroring the *same* ClawHub skill.
+            skillhubRow(),
+            skillhubRow({ ownerName: "u_2", downloads: 50, namespace: { canonicalName: "@user_2/agent-browser" } }),
+            // Same slug, different names, no upstream: two unrelated skills.
+            skillhubRow({ slug: "github", name: "Github", ownerName: "u_3", downloads: 20, namespace: { canonicalName: "@u_3/github" }, upstream_url: "" }),
+            skillhubRow({ slug: "github", name: "GitHub API", ownerName: "u_4", downloads: 10, namespace: { canonicalName: "@u_4/github" }, upstream_url: "" })
+          ]
+        }
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  if (target.includes("clawhub.ai/api/v1/skills")) {
+    return new Response(
+      JSON.stringify({
+        items: [
+          // The original of the mirrored pair above.
+          { ownerHandle: "rez0", slug: "agent-browser", displayName: "Agent Browser", stats: { downloads: 900 } }
+        ],
+        nextCursor: null
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }
+
+  if (target.includes("data.jsdelivr.com")) {
+    return new Response(JSON.stringify({ files: [{ name: "/skills/pdf/SKILL.md" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }
+
+  if (target.includes("api.github.com")) throw new Error("no github token here");
+  throw new Error(`unexpected fetch: ${target}`);
+};
+
+const dedupeOut = await callRoute("search", { keyword: "", pageSize: 30 });
+const dedupeItems = dedupeOut.result?.value?.items || [];
+const bySlug = (slug) => dedupeItems.filter((item) => item.slug === slug);
+
+check(
+  "a mirrored skill collapses to one row",
+  bySlug("agent-browser").length === 1,
+  JSON.stringify(bySlug("agent-browser").map((i) => i.source))
+);
+check(
+  "the best-described copy is the one kept",
+  bySlug("agent-browser")[0]?.source === "skillhub",
+  JSON.stringify(bySlug("agent-browser").map((i) => i.source))
+);
+check(
+  "two unrelated skills with a shared slug are both kept",
+  bySlug("github").length === 2,
+  JSON.stringify(bySlug("github").map((i) => i.name))
+);
+check(
+  "the de-duplicated list still carries the GitHub row",
+  dedupeItems.some((item) => item.source === "github")
+);
+
+// ── 6c. A second install must not delete the first ───────────────────
+//
+// The install directory is the slug, and the catalogues share that namespace:
+// SkillHub alone lists four different "agent-browser" skills by four owners.
+// Installing used to rmSync whatever was already there, so installing the
+// second one silently destroyed the first.
+
+mkdirSync(join(scratchSkills, "agent-browser"), { recursive: true });
+writeFileSync(join(scratchSkills, "agent-browser", "SKILL.md"), "---\nname: agent-browser\n---\nfirst\n");
+
+const blocked = await callRoute("install", { source: "skillhub", slug: "agent-browser" });
+check("install refuses to clobber an occupied directory", blocked.result?.ok === false, JSON.stringify(blocked.result));
+check(
+  "the refusal names the collision instead of failing silently",
+  /占用/.test(blocked.result?.error?.message || ""),
+  blocked.result?.error?.message
+);
+
+// With overwrite asked for, the collision guard must step aside — the request
+// now gets as far as the download, which is what fails here.
+const allowed = await callRoute("install", { source: "skillhub", slug: "agent-browser", overwrite: true });
+check(
+  "overwrite:true passes the collision guard",
+  allowed.result?.ok === false && !/占用/.test(allowed.result?.error?.message || ""),
+  allowed.result?.error?.message
 );
 
 globalThis.fetch = realFetch;

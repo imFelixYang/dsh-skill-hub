@@ -587,6 +587,12 @@ const skillhub = {
       category: row.category || '',
       tags: Array.isArray(row.tags) ? row.tags.slice(0, 6) : [],
       homepage: row.homepage || '',
+      // Identity for de-duplication. `upstreamUrl` marks an entry SkillHub
+      // mirrors from another registry (currently ClawHub); `namespaceKey` is
+      // SkillHub's own per-publisher identity, which keeps two publishers who
+      // happen to reuse the same slug as two separate skills.
+      upstreamUrl: row.upstream_url || '',
+      namespaceKey: (row.namespace && row.namespace.canonicalName) || '',
       installed: installName.has(String(row.slug).toLowerCase())
     }))
 
@@ -761,6 +767,9 @@ const clawhub = {
         category: '',
         tags: Array.isArray(row.topics) ? row.topics.slice(0, 6) : [],
         homepage: '',
+        // ClawHub's own identity is owner/slug: a bare slug is not unique
+        // across publishers, so de-duplication keys off both parts.
+        namespaceKey: owner ? owner + '/' + slug : '',
         installed: installName.has(slug.toLowerCase())
       }
     })
@@ -1106,6 +1115,9 @@ const github = {
       category: '',
       tags: [],
       homepage: 'https://github.com/' + entry.repoKey + '/tree/' + entry.repoRef + '/' + entry.path,
+      // A GitHub skill's canonical identity is repo + directory: two repos can
+      // both ship a `code-review` directory without being the same skill.
+      namespaceKey: entry.repoKey + '/' + entry.path,
       installed: installName.has(entry.slug)
     }))
 
@@ -1213,6 +1225,84 @@ const SOURCES = { skillhub, clawhub, github }
 
 // ── aggregation ─────────────────────────────────────────────────────────────
 
+/**
+ * When two catalogues hold the same skill, the higher-ranked source wins.
+ * SkillHub outranks ClawHub because it carries Chinese descriptions and a
+ * mirror relationship to ClawHub; GitHub is last because its rows are the
+ * thinnest (no downloads, no summary until the detail call).
+ */
+const SOURCE_RANK = { skillhub: 0, clawhub: 1, github: 2 }
+
+/** Lower-case and strip everything that only varies by formatting. */
+function foldText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '')
+}
+
+/**
+ * Registry names that a mirror's owner segment is prefixed with. SkillHub
+ * stamps an imported row as `@clawhub_rez0/agent-browser`; the `clawhub_`
+ * prefix is the registry it came from, not part of the owner's handle.
+ */
+const SOURCE_PREFIXES = ['clawhub_', 'skillhub_']
+
+/** Drop a leading registry marker from an owner segment, if present. */
+function stripSourcePrefix(segment) {
+  for (const prefix of SOURCE_PREFIXES) {
+    if (segment.startsWith(prefix)) return segment.slice(prefix.length)
+  }
+  return segment
+}
+
+/**
+ * Fold an "owner/slug" style identity segment by segment.
+ *
+ * Folding the whole string would collapse the separator too, so
+ * `owner/slug` and `owner-slug` would look identical — wrong, because they
+ * name different things. Each part is folded and rejoined instead. A leading
+ * `@` (SkillHub's canonical-name marker) and any registry prefix are removed
+ * first, so a mirror's namespace lines up with the identity it mirrors.
+ */
+function normalizeIdentity(value) {
+  const parts = String(value || '')
+    .replace(/^@+/, '')
+    .split('/')
+    .map(foldText)
+    .map((part, index) => (index === 0 ? stripSourcePrefix(part) : part))
+    .filter(Boolean)
+  return parts.length ? parts.join('/') : ''
+}
+
+/**
+ * The identity of the skill this row was mirrored from, as "owner/slug".
+ * Only SkillHub currently publishes this (`upstream_url`), and only for the
+ * entries it imports from ClawHub. Returning '' means "this row is original
+ * as far as we know" — which is not the same as "its identity is unknown".
+ */
+function upstreamIdentity(item) {
+  if (!item.upstreamUrl) return ''
+  const match = String(item.upstreamUrl).match(/clawhub\.ai\/([^/]+)\/([^/?#]+)/i)
+  if (!match) return ''
+  const owner = foldText(match[1])
+  const slug = foldText(match[2])
+  return owner && slug ? owner + '/' + slug : ''
+}
+
+/**
+ * Fallback identity for a re-published skill: the same slug *and* the same
+ * display name. Requiring both keeps two unrelated skills that merely share a
+ * generic name apart, since their slugs almost always differ.
+ */
+function fuzzyIdentity(item) {
+  const slug = foldText(item.slug)
+  const name = foldText(item.name)
+  if (!slug || !name) return ''
+  // A one-word name like "github" is too common to merge on.
+  if (name.length < 4) return ''
+  return slug + '|' + name
+}
+
 function resolveSourceList(config) {
   const list = []
   if (config.enableSkillHub) list.push('skillhub')
@@ -1260,25 +1350,55 @@ async function searchAcross(config, args, signal) {
     if (outcome.error) errors.push({ source: outcome.sourceId, error: outcome.error })
   }
 
-  // Prefer the richer metadata when the same slug exists in several catalogues.
-  const priority = { skillhub: 0, clawhub: 1, github: 2 }
-  const bySlug = new Map()
-  for (const outcome of outcomes) {
+  // De-duplicate. The catalogues overlap heavily — the same skill is routinely
+  // republished across SkillHub, ClawHub and GitHub — so this list is one index
+  // of unique skills, not a concatenation of mirrors.
+  //
+  // Tiers run from certain to heuristic. A heuristic tier never displaces a
+  // confirmed identity. A bare slug is never a key on its own: "agent-browser"
+  // is published by 30 unrelated people and "libai" names three different
+  // skills, so the fallback tier requires the slug *and* the display name to
+  // agree before two rows are called the same thing.
+  const ranked = [...outcomes].sort(
+    (a, b) => (SOURCE_RANK[a.sourceId] ?? 9) - (SOURCE_RANK[b.sourceId] ?? 9)
+  )
+
+  const merged = []
+  const claimedIdentity = new Set() // an identity (own or mirrored) already in the index
+  const claimedWithinSource = new Set() // "source|identity" to collapse a page's own repeats
+  const claimedFuzzy = new Set() // "slug|name" already kept
+
+  for (const outcome of ranked) {
     for (const item of outcome.items) {
-      const key = String(item.slug || '').toLowerCase()
-      if (!key) continue
-      const existing = bySlug.get(key)
-      if (!existing) {
-        bySlug.set(key, item)
-        continue
-      }
-      const incomingRank = priority[item.source] ?? 9
-      const existingRank = priority[existing.source] ?? 9
-      if (incomingRank < existingRank) bySlug.set(key, item)
+      // Must fold segment-by-segment: this string is compared against
+      // `upstream`, which also keeps its "/" separator.
+      const namespace = normalizeIdentity(item.namespaceKey)
+      // Only set when this row mirrors another registry (see upstreamIdentity).
+      const upstream = upstreamIdentity(item)
+      const fuzzy = fuzzyIdentity(item)
+
+      // Everything this row could be: the skill it is, and the skill it copies.
+      // Both are checked and both are recorded, because a mirror and its
+      // original must collapse in either arrival order.
+      const identities = [upstream, namespace].filter(Boolean)
+      const withinKey = namespace ? outcome.sourceId + '|' + namespace : ''
+
+      // The same page can repeat an entry; its own canonical name catches that.
+      if (withinKey && claimedWithinSource.has(withinKey)) continue
+      // An identity already present means an earlier, higher-ranked row is this
+      // same skill. Ranking puts SkillHub first because it carries the Chinese
+      // metadata, so the row kept here is the better-described one.
+      if (identities.some((identity) => claimedIdentity.has(identity))) continue
+      // Same slug *and* same display name: one skill republished by someone
+      // else. Both signals must agree before a row is treated as a duplicate.
+      if (fuzzy && claimedFuzzy.has(fuzzy)) continue
+
+      if (withinKey) claimedWithinSource.add(withinKey)
+      for (const identity of identities) claimedIdentity.add(identity)
+      if (fuzzy) claimedFuzzy.add(fuzzy)
+      merged.push(item)
     }
   }
-
-  const merged = Array.from(bySlug.values())
   merged.sort((a, b) => {
     if (a.installed !== b.installed) return a.installed ? -1 : 1
     const delta = (b.downloads || 0) - (a.downloads || 0)
@@ -1370,6 +1490,19 @@ async function installSkill(config, ref, signal) {
 
   const skillsDir = resolveSkillsDir(config)
   const targetDir = join(skillsDir, slug)
+
+  // A skill's directory name is its slug, and the catalogues share that
+  // namespace: SkillHub alone lists four different "agent-browser" skills by
+  // four different owners. Installing one used to rmSync whatever was already
+  // there, so a second install silently deleted the first. Updating an existing
+  // skill is still possible, but it has to be asked for.
+  const allowOverwrite = ref.overwrite === true
+  if (existsSync(targetDir) && !allowOverwrite) {
+    return fail(
+      'bad-request',
+      `「${slug}」这个目录已被占用：不同作者的技能可能同名，只能装进同一个目录。请先到「已安装」里卸载已有的「${slug}」，再安装这一个。`
+    )
+  }
 
   let payload
   try {
@@ -1631,7 +1764,9 @@ async function dispatch(endpoint, payload, signal, config, ctx) {
         slug: args.slug,
         owner: args.owner,
         repoRef: args.repoRef,
-        repoPath: args.repoPath
+        repoPath: args.repoPath,
+        // Replacing an existing install is opt-in: see installSkill.
+        overwrite: args.overwrite === true
       }
       if (!ref.source) return fail('bad-request', 'install requires a source')
       return await installSkill(resolved, ref, signal)
