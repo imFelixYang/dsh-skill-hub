@@ -1,0 +1,14 @@
+# dsh-skill-hub bundle patch.
+#
+# Host half: registers exact /api/skill-hub/* fetch routes (search, detail,
+# install, uninstall, readme, categories, installed) against SkillHub and
+# ClawHub. Client half: claims the official `sidebar.panellist` + `main`
+# seats, so the skill centre is a first-class panel rather than an overlay.
+- insert:
+    - id: dsh-skill-hub
+      name: 'dsh-skill-hub'
+      config:
+        skillhubApiBase: https://api.skillhub.tencent.com
+        clawhubApiBase: https://clawhub.ai
+        localSkillsDir: ''
+        preferSkillHub: true

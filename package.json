@@ -1,0 +1,62 @@
+{
+  "name": "dsh-skill-hub",
+  "version": "0.1.0",
+  "description": "Aggregated skill hub for DeepSeek Harness: search SkillHub + ClawHub, preview README, install/uninstall into $DSH_HOME/skills. Registers as an official sidebar panel.",
+  "type": "module",
+  "main": "src/index.js",
+  "private": true,
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "locale/*.json",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "skill-hub",
+    "skillhub",
+    "clawhub"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imFelixYang/dsh-skill-hub.git"
+  },
+  "homepage": "https://github.com/imFelixYang/dsh-skill-hub",
+  "bugs": {
+    "url": "https://github.com/imFelixYang/dsh-skill-hub/issues"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-app-boot": "*",
+    "@deepseek-ai/dsh-client-connection": "*",
+    "@deepseek-ai/dsh-client-ui-slots": "*"
+  }
+}

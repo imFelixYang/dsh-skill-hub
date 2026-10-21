@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="Skill Hub">
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="#2b3542"/>
+  <path d="M18.5 4.5 8 17h6.5L13 27.5 23.5 15H17l1.5-10.5Z"
+        fill="#fbf1c7" stroke="#fbf1c7" stroke-width="1.1" stroke-linejoin="round"/>
+</svg>
