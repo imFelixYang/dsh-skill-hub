@@ -976,6 +976,8 @@ window.__ModuleLoader__.load({
 
       var requestRef = useRef(0);
       var toastTimer = useRef(null);
+      // Which source/category the rows on screen were fetched for.
+      var filterRef = useRef("");
 
       var showToast = useCallback(function (message, tone) {
         setToast({ message: message, tone: tone || "info" });
@@ -1076,6 +1078,15 @@ window.__ModuleLoader__.load({
       useEffect(
         function () {
           if (tab !== "market") return undefined;
+          // A filter change must never leave the previous rows on screen: until
+          // the new page lands they would still be another category's list,
+          // which reads as "every tab shows the same skills".
+          var stamp = (activeSource || "") + "|" + (activeCategory || "");
+          if (filterRef.current !== stamp) {
+            filterRef.current = stamp;
+            setItems([]);
+            setHasMore(false);
+          }
           var timer = setTimeout(function () {
             runSearch(1, false);
           }, keyword ? 260 : 0);

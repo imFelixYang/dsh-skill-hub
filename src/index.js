@@ -602,7 +602,11 @@ const skillhub = {
     const installName = new Set(listLocalSkills(resolveSkillsDir(config)).map((s) => s.slug.toLowerCase()))
 
     const items = rows.map((row) => ({
-      id: 'skillhub:' + row.slug,
+      // Two publishers may reuse one slug, so the per-publisher namespace is
+      // part of the row identity. Without it a page that shows both would hand
+      // React two children with the same key, and cards would be duplicated or
+      // dropped on re-render.
+      id: 'skillhub:' + ((row.namespace && row.namespace.canonicalName) || row.slug),
       source: 'skillhub',
       sourceLabel: 'SkillHub',
       slug: row.slug,

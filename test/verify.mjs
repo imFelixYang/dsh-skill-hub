@@ -266,7 +266,7 @@ globalThis.fetch = async (url) => {
       JSON.stringify({
         code: 0,
         data: {
-          total: 1,
+          total: 2,
           skills: [
             {
               slug: "pdf",
@@ -279,7 +279,25 @@ globalThis.fetch = async (url) => {
               category: "office-efficiency",
               tags: ["pdf"],
               ownerName: "u_1",
+              namespace: { canonicalName: "u_1/pdf" },
               version: "1.0.0"
+            },
+            {
+              // A different publisher reusing the same slug. It is a different
+              // skill, so it must stay in the list — but it needs its own row
+              // identity, or React would see two children with one key.
+              slug: "pdf",
+              name: "PDF 工具箱",
+              description: "another pdf toolkit",
+              description_zh: "另一套 PDF 工具",
+              downloads: 10,
+              stars: 1,
+              verified: false,
+              category: "office-efficiency",
+              tags: ["pdf"],
+              ownerName: "u_2",
+              namespace: { canonicalName: "u_2/pdf" },
+              version: "0.2.0"
             }
           ]
         }
@@ -323,6 +341,16 @@ check(
 check(
   "Chinese summary is preferred when present",
   (searchValue.items || []).some((item) => item.summaryZh === "处理 PDF 文件")
+);
+
+// Two publishers, one slug: both are real skills and must be listed, but each
+// row needs its own identity. Duplicate keys make React reuse or drop cards.
+const pdfRows = (searchValue.items || []).filter((item) => item.slug === "pdf");
+check("both publishers of a shared slug are listed", pdfRows.length === 2, JSON.stringify(pdfRows.map((r) => r.name)));
+check(
+  "rows carry unique ids even when the slug repeats",
+  new Set(pdfRows.map((row) => row.id)).size === pdfRows.length,
+  JSON.stringify(pdfRows.map((row) => row.id))
 );
 
 const sourcesOut = await callRoute("sources", {});
